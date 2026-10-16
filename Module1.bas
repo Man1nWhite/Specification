@@ -1,7 +1,8 @@
 Attribute VB_Name = "Module1"
 Option Explicit
 
-' A:E on "Спец_ТКП" is a generated preview, not a second input form.
+' A:E on "Спец_ТКП" is the generated five-column specification preview.
+' F is a hidden group marker used when transferring section formatting to Word.
 ' Source: C = description, D = article, F = unit, G = quantity.
 ' Prices and work are deliberately not included in Appendix 3.
 Public Sub ОбновитьСпецификациюТКП()
@@ -19,7 +20,8 @@ Public Sub СформироватьТКП()
     Dim wd As Object, doc As Object, tbl As Object
     Dim spec As Worksheet, info As Worksheet
     Dim templatePath As String, itemCount As Long, lastRow As Long
-    Dim r As Long, col As Long, groupNo As Long, itemNo As Long
+    Dim r As Long, col As Long
+    Dim isGroup As Boolean
     Dim number As String, headers As Variant, errorText As String
 
     On Error GoTo Failed
@@ -55,7 +57,7 @@ Public Sub СформироватьТКП()
 
     Set spec = ThisWorkbook.Worksheets("Спец_ТКП")
     lastRow = spec.Cells(spec.Rows.Count, "A").End(xlUp).Row
-    ' Two header rows (titles and column numbers) followed by generated groups/items.
+    ' Two header rows followed by the already numbered preview rows.
     Set tbl = doc.Tables.Add(doc.Bookmarks("Spec_Table").Range, lastRow + 1, 5)
     headers = Array("№ п/п", "Наименование и техническая характеристика", _
                     "Артикул", "Ед. изм.", "Кол-во")
@@ -65,18 +67,11 @@ Public Sub СформироватьТКП()
     Next col
 
     For r = 2 To lastRow
-        If spec.Cells(r, "A").Value2 = "H" Then
-            groupNo = groupNo + 1
-            itemNo = 0
-            tbl.Cell(r + 1, 1).Range.Text = CStr(groupNo) & "."
-            tbl.Rows(r + 1).Range.Font.Bold = True
-        Else
-            itemNo = itemNo + 1
-            tbl.Cell(r + 1, 1).Range.Text = CStr(itemNo) & "."
-        End If
-        For col = 2 To 5
+        isGroup = (ЧистыйТекст(spec.Cells(r, "F").Value2) = "H")
+        For col = 1 To 5
             tbl.Cell(r + 1, col).Range.Text = ЧистыйТекст(spec.Cells(r, col).Value2)
         Next col
+        If isGroup Then tbl.Rows(r + 1).Range.Font.Bold = True
     Next r
 
     tbl.Borders.Enable = True
@@ -99,6 +94,7 @@ Private Function СобратьСпецификацию() As Long
     Dim items() As Variant, titles As Variant
     Dim capacity As Long, itemCount As Long
     Dim sheetNo As Long, groupNo As Long, i As Long, outRow As Long
+    Dim itemNo As Long, headingNo As Long
     Dim groupHasItems As Boolean, oldLastRow As Long
     Dim dst As Worksheet
 
@@ -118,34 +114,42 @@ Private Function СобратьСпецификацию() As Long
 
     Set dst = ThisWorkbook.Worksheets("Спец_ТКП")
     oldLastRow = dst.Cells(dst.Rows.Count, "A").End(xlUp).Row
-    With dst.Range("A1:E" & CStr(oldLastRow))
+    With dst.Range("A1:F" & CStr(Application.Max(oldLastRow, 1)))
         .ClearContents
         .Font.Bold = False
     End With
-    dst.Range("A1:E1").Value = Array("Тип", "Наименование и техническая характеристика", _
+    dst.Range("A1:E1").Value = Array("№ п/п", "Наименование и техническая характеристика", _
                                       "Артикул", "Ед. изм.", "Кол-во")
     dst.Range("A1:E1").Font.Bold = True
     outRow = 2
+    headingNo = 0
 
     For groupNo = 1 To 9
         groupHasItems = False
         For i = 1 To itemCount
             If CLng(items(1, i)) = groupNo Then
                 If Not groupHasItems Then
-                    dst.Cells(outRow, "A").Value2 = "H"
+                    headingNo = headingNo + 1
+                    dst.Cells(outRow, "A").NumberFormat = "@"
+                    dst.Cells(outRow, "A").Value2 = CStr(headingNo) & "."
                     dst.Cells(outRow, "B").Value2 = titles(groupNo - 1)
+                    dst.Cells(outRow, "F").Value2 = "H"
                     dst.Range("A" & outRow & ":E" & outRow).Font.Bold = True
                     outRow = outRow + 1
                     groupHasItems = True
                 End If
-                dst.Cells(outRow, "A").Value2 = "I"
+                dst.Cells(outRow, "A").NumberFormat = "@"
+                dst.Cells(outRow, "A").Value2 = CStr(itemNo + 1) & "."
                 dst.Cells(outRow, "B").Value2 = items(2, i)
                 dst.Cells(outRow, "C").Value2 = items(3, i)
                 dst.Cells(outRow, "D").Value2 = items(4, i)
                 dst.Cells(outRow, "E").Value2 = items(5, i)
+                dst.Cells(outRow, "F").Value2 = "I"
+                itemNo = itemNo + 1
                 outRow = outRow + 1
             End If
         Next i
+        itemNo = 0
     Next groupNo
 
     dst.Columns("A").ColumnWidth = 7
@@ -153,6 +157,7 @@ Private Function СобратьСпецификацию() As Long
     dst.Columns("C").ColumnWidth = 27
     dst.Columns("D").ColumnWidth = 13
     dst.Columns("E").ColumnWidth = 12
+    dst.Columns("F").Hidden = True
     dst.Range("B1:B" & CStr(outRow - 1)).WrapText = True
     СобратьСпецификацию = itemCount
 End Function
