@@ -643,16 +643,11 @@ def populate_spec_table(doc: DocxDocument, sections: Iterable[SpecSection]) -> d
 
 
 def find_default_template(base_dir: Path = ROOT) -> Path:
-    for name in (
-        "ТКП_шаблон.dotx",
-        "ТКП_шаблон.docx",
-        "Коммерческое предложение_шаблон.docx",
-        "Коммерческое предложение.docx",
-    ):
-        candidate = base_dir / name
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"Word template not found in {base_dir}")
+    """Return the project's single supported default template."""
+    template = base_dir / "ТКП_шаблон.dotx"
+    if template.exists():
+        return template
+    raise FileNotFoundError(f"Word template ТКП_шаблон.dotx not found in {base_dir}")
 
 
 def find_default_workbook(base_dir: Path = ROOT) -> Path:
@@ -832,11 +827,6 @@ def main() -> None:
         type=Path,
         default=ROOT / "Коммерческое предложение_результат.docx",
         help="Путь для сохранения готового документа Word",
-    )
-    parser.add_argument(
-        "--demo",
-        action="store_true",
-        help="Заполнить тестовыми данными, если в книге нет позиций с количеством > 0",
     )
     args = parser.parse_args()
 
