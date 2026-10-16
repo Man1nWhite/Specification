@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = ROOT / "Gen_TKP.xlsm"
 TEMPLATE = ROOT / "ТКП_шаблон.dotx"
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+M = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS = {"w": W}
+SHEET_NS = {"m": M}
 
 
 class TKPTest(unittest.TestCase):
@@ -45,6 +47,19 @@ class TKPTest(unittest.TestCase):
             self.assertEqual(target[name].getparent().tag, f"{{{W}}}p")
             self.assertEqual(target[name].getparent().getparent().tag, f"{{{W}}}tc")
 
+    def test_preview_has_only_the_standard_specification_columns(self):
+        with ZipFile(WORKBOOK) as archive:
+            sheet = etree.fromstring(archive.read("xl/worksheets/sheet26.xml"))
+        header = sheet.xpath(".//m:c[@r='A1']//m:t/text()", namespaces=SHEET_NS)
+        self.assertEqual(header, ["№ п/п"])
+        helper_column = sheet.xpath(".//m:col[@min='6' and @max='6']", namespaces=SHEET_NS)
+        self.assertEqual(len(helper_column), 1)
+        self.assertEqual(helper_column[0].get("hidden"), "1")
+
+        source = (ROOT / "Module1.bas").read_text(encoding="utf-8")
+        self.assertNotIn('"Тип"', source)
+        self.assertIn("For col = 1 To 5", source)  # Word receives visible A:E verbatim.
+
     def test_generation_groups_sums_skips_and_refreshes(self):
         app = ExcelApplication.open(WORKBOOK)
         rows = [
@@ -65,23 +80,28 @@ class TKPTest(unittest.TestCase):
 
         app.run("ОбновитьСпецификациюТКП")
         preview = app.sheet("Спец_ТКП")
-        values = [tuple(preview.value(f"{letter}{row}") for letter in "ABCDE")
+        values = [tuple(preview.value(f"{letter}{row}") for letter in "ABCDEF")
                   for row in range(2, 12)]
-        self.assertEqual([v[1] for v in values if v[0] == "H"], [
+        group_rows = [v for v in values if v[5] == "H"]
+        item_rows = [v for v in values if v[5] == "I"]
+        self.assertEqual([v[1] for v in group_rows], [
             "Оборудование НВТ", "Оборудование Эксара",
             "Оборудование 3-х поставщиков", "ЗИП 3-х поставщиков", "ПО ИнСАТ",
         ])
-        self.assertEqual([v[1] for v in values if v[0] == "I"], [
+        self.assertEqual([v[1] for v in item_rows], [
             "NV-1", "Шкаф Эксара", "Модуль ввода", "Реле ЗИП", "Лицензия ПО",
         ])
-        self.assertEqual(next(v for v in values if v[2] == "X-123")[4], 5)
+        self.assertEqual([v[0] for v in group_rows], ["1.", "2.", "3.", "4.", "5."])
+        self.assertEqual([v[0] for v in item_rows], ["1."] * 5)
+        self.assertEqual(next(v for v in item_rows if v[2] == "X-123")[4], 5)
+        self.assertEqual(preview.value("A1"), "№ п/п")
         self.assertEqual(preview.value("A12"), None)
 
         # A second run must clear old rows: the preview is regenerated, not appended.
         for sheet, row, *_ in rows:
             app.sheet(sheet).set_value(f"G{row}", 0)
         app.run("ОбновитьСпецификациюТКП")
-        self.assertEqual(preview.value("A1"), "Тип")
+        self.assertEqual(preview.value("A1"), "№ п/п")
         self.assertEqual(preview.value("A2"), None)
         self.assertEqual(preview.value("B11"), None)
 

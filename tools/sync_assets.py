@@ -177,15 +177,33 @@ def inline_cell(address: str, text: str) -> etree._Element:
 
 
 def patch_preview_sheet() -> None:
-    """Give the otherwise empty preview sheet a header and usage hints."""
+    """Initialize the preview and keep its helper marker column hidden."""
     part = "xl/worksheets/sheet26.xml"
     with ZipFile(WORKBOOK) as archive:
         root = etree.fromstring(archive.read(part))
     data = root.find(X + "sheetData")
-    assert data is not None
+    dimension = root.find(X + "dimension")
+    assert data is not None and dimension is not None
+
+    # Existing workbook already has the hints. Update its visible header and
+    # hide the helper marker column used internally when Word is generated.
+    if dimension.get("ref") == "A1:G3":
+        header = root.xpath(".//x:c[@r='A1']", namespaces={"x": X_NS})
+        if header:
+            header[0].clear()
+            header[0].set("r", "A1")
+            header[0].set("t", "inlineStr")
+            header[0].append(etree.Element(X + "is"))
+            etree.SubElement(header[0][0], X + "t").text = "№ п/п"
+        columns = root.find(X + "cols")
+        if columns is not None:
+            for col in columns.findall(X + "col"):
+                if col.get("min") == "6" and col.get("max") == "6":
+                    col.set("hidden", "1")
+        replace_zip_part(WORKBOOK, {part: write_xml(root)})
+        return
+
     # This is only an initial state for a generated sheet, not user data.
-    if root.find(X + "dimension").get("ref") == "A1:G3":
-        return  # already initialized
     if len(data) != 1 or data[0].get("r") != "1":
         raise ValueError("The preview sheet is not empty; refusing to erase it")
     data.remove(data[0])
@@ -196,22 +214,22 @@ def patch_preview_sheet() -> None:
     )
     first = etree.SubElement(data, X + "row", r="1", spans="1:7")
     for letter, value in zip("ABCDE", (
-        "Тип", "Наименование и техническая характеристика", "Артикул", "Ед. изм.", "Кол-во"
+        "№ п/п", "Наименование и техническая характеристика", "Артикул", "Ед. изм.", "Кол-во"
     )):
         first.append(inline_cell(letter + "1", value))
     first.append(inline_cell("G1", hints[0]))
     for row_num in (2, 3):
         row = etree.SubElement(data, X + "row", r=str(row_num), spans="7:7")
         row.append(inline_cell(f"G{row_num}", hints[row_num - 1]))
-    dimension = root.find(X + "dimension")
-    assert dimension is not None
     dimension.set("ref", "A1:G3")
     sheet_format = root.find(X + "sheetFormatPr")
     assert sheet_format is not None
     columns = etree.Element(X + "cols")
     for col_no, width in ((1, 7), (2, 65), (3, 27), (4, 13), (5, 12), (6, 3), (7, 78)):
-        etree.SubElement(columns, X + "col", min=str(col_no), max=str(col_no),
-                         width=str(width), customWidth="1")
+        attributes = {"min": str(col_no), "max": str(col_no), "width": str(width), "customWidth": "1"}
+        if col_no == 6:
+            attributes["hidden"] = "1"
+        etree.SubElement(columns, X + "col", **attributes)
     root.insert(root.index(sheet_format) + 1, columns)
     replace_zip_part(WORKBOOK, {part: write_xml(root)})
 
