@@ -1,0 +1,3 @@
+# Packaging the updated VBA source and OOXML bookmarks (Python 3.10+).
+pyOpenVBA==6.5.0
+lxml==6.0.2
