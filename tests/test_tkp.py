@@ -1,16 +1,24 @@
-"""Static packaging checks and a headless VBA preview test (no Office needed)."""
+"""Static packaging checks, headless VBA preview test, and Python generator tests."""
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from zipfile import ZipFile
 
+import docx
 from lxml import etree
+import openpyxl
 from pyopenvba import ExcelFile
 from pyopenvba.apps.excel import ExcelApplication
+
+from generate_tkp import build_preview_rows, generate_tkp, read_tkp_data
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = ROOT / "Gen_TKP.xlsm"
 TEMPLATE = ROOT / "ТКП_шаблон.dotx"
+TEMPLATE_DOCX = ROOT / "ТКП_шаблон.docx"
+TEMPLATE_KP_DOCX = ROOT / "Коммерческое предложение_шаблон.docx"
+RESULT_DOCX = ROOT / "Коммерческое предложение_результат.docx"
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 M = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS = {"w": W}
@@ -26,26 +34,35 @@ class TKPTest(unittest.TestCase):
             self.assertIn("Module12", book.module_names())  # existing macros preserved
 
     def test_bookmarks_are_in_their_destination_not_the_notes(self):
-        with ZipFile(TEMPLATE) as archive:
-            document = etree.fromstring(archive.read("word/document.xml"))
-            header = etree.fromstring(archive.read("word/header1.xml"))
-        body = document.find(".//w:body", NS)
-        self.assertIsNotNone(body)
-        notes = next(p for p in body.findall("w:p", NS)
-                     if "Примечания к Приложению" in "".join(p.itertext()))
-        target = {}
-        for name in ("Num", "Customer", "Object", "Spec_Table"):
-            starts = document.xpath(".//w:bookmarkStart[@w:name=$name]", namespaces=NS, name=name)
-            self.assertEqual(len(starts), 1)
-            self.assertIsNot(starts[0].getparent(), notes)
-            target[name] = starts[0]
-        self.assertLess(body.index(target["Spec_Table"].getparent()), body.index(notes))
-        self.assertEqual(
-            len(header.xpath(".//w:bookmarkStart[@w:name='HeaderNum']", namespaces=NS)), 1
-        )
-        for name in ("Num", "Customer", "Object"):
-            self.assertEqual(target[name].getparent().tag, f"{{{W}}}p")
-            self.assertEqual(target[name].getparent().getparent().tag, f"{{{W}}}tc")
+        for tpl_path in (TEMPLATE, TEMPLATE_DOCX, TEMPLATE_KP_DOCX):
+            with self.subTest(template=tpl_path.name):
+                self.assertTrue(tpl_path.exists())
+                with ZipFile(tpl_path) as archive:
+                    document = etree.fromstring(archive.read("word/document.xml"))
+                    header = etree.fromstring(archive.read("word/header1.xml"))
+                body = document.find(".//w:body", NS)
+                self.assertIsNotNone(body)
+                notes = next(
+                    p
+                    for p in body.findall("w:p", NS)
+                    if "Примечания к Приложению" in "".join(p.itertext())
+                )
+                target = {}
+                for name in ("Num", "Customer", "Object", "Subject", "Spec_Table"):
+                    starts = document.xpath(
+                        ".//w:bookmarkStart[@w:name=$name]", namespaces=NS, name=name
+                    )
+                    self.assertEqual(len(starts), 1)
+                    self.assertIsNot(starts[0].getparent(), notes)
+                    target[name] = starts[0]
+                self.assertLess(body.index(target["Spec_Table"].getparent()), body.index(notes))
+                self.assertEqual(
+                    len(header.xpath(".//w:bookmarkStart[@w:name='HeaderNum']", namespaces=NS)),
+                    1,
+                )
+                for name in ("Num", "Customer", "Object", "Subject"):
+                    self.assertEqual(target[name].getparent().tag, f"{{{W}}}p")
+                    self.assertEqual(target[name].getparent().getparent().tag, f"{{{W}}}tc")
 
     def test_preview_has_only_the_standard_specification_columns(self):
         with ZipFile(WORKBOOK) as archive:
@@ -63,13 +80,13 @@ class TKPTest(unittest.TestCase):
     def test_generation_groups_sums_skips_and_refreshes(self):
         app = ExcelApplication.open(WORKBOOK)
         rows = [
+            ("SW(w.o.VAT)", 14, "Лицензия ПО", "MasterPLC.N1000", 2),
             ("1", 3, None, "NV-1", 2),  # broken lookup in C: fall back to article D
             ("1", 14, "Шкаф Эксара", "EX-1", 4),
             ("1", 20, "Модуль ввода", "X-123", 2),
-            ("2", 20, "Модуль ввода", "X-123", 3),  # same item: sum 2 + 3
+            ("2", 20, "Модуль ввода", "X-123", 3),
             ("1", 21, "Не включать", "X-0", 0),
             ("Spare parts", 25, "Реле ЗИП", "ZIP-1", 1),
-            ("SW(w.o.VAT)", 14, "Лицензия ПО", "MasterPLC.N1000", 2),
         ]
         for sheet, row, description, article, qty in rows:
             source = app.sheet(sheet)
@@ -80,22 +97,57 @@ class TKPTest(unittest.TestCase):
 
         app.run("ОбновитьСпецификациюТКП")
         preview = app.sheet("Спец_ТКП")
-        values = [tuple(preview.value(f"{letter}{row}") for letter in "ABCDEF")
-                  for row in range(2, 12)]
+        values = [
+            tuple(preview.value(f"{letter}{row}") for letter in "ABCDEF")
+            for row in range(2, 14)
+        ]
         group_rows = [v for v in values if v[5] == "H"]
         item_rows = [v for v in values if v[5] == "I"]
-        self.assertEqual([v[1] for v in group_rows], [
-            "Оборудование НВТ", "Оборудование Эксара",
-            "Оборудование 3-х поставщиков", "ЗИП 3-х поставщиков", "ПО ИнСАТ",
-        ])
-        self.assertEqual([v[1] for v in item_rows], [
-            "NV-1", "Шкаф Эксара", "Модуль ввода", "Реле ЗИП", "Лицензия ПО",
-        ])
-        self.assertEqual([v[0] for v in group_rows], ["1.", "2.", "3.", "4.", "5."])
-        self.assertEqual([v[0] for v in item_rows], ["1."] * 5)
-        self.assertEqual(next(v for v in item_rows if v[2] == "X-123")[4], 5)
+
+        self.assertEqual(
+            [v[1] for v in group_rows],
+            [
+                "Программное обеспечение",
+                "Шкаф 1 ПТК",
+                "Шкаф 1 телекоммуникационное оборудование",
+                "Шкаф 1 шкафное оборудование",
+                "Шкаф 2 шкафное оборудование",
+                "ЗИП",
+            ],
+        )
+        self.assertEqual([v[0] for v in group_rows], ["1.", "2.", "3.", "4.", "5.", "6."])
+        self.assertEqual([v[3] for v in group_rows], ["Компл."] * 6)
+        self.assertEqual([v[4] for v in group_rows], [1.0] * 6)
+
+        self.assertEqual(
+            [v[1] for v in item_rows],
+            [
+                "Лицензия ПО",
+                "NV-1",
+                "Шкаф Эксара",
+                "Модуль ввода",
+                "Модуль ввода",
+                "Реле ЗИП",
+            ],
+        )
+        self.assertEqual([v[0] for v in item_rows], ["1."] * 6)
         self.assertEqual(preview.value("A1"), "№ п/п")
-        self.assertEqual(preview.value("A12"), None)
+        self.assertEqual(preview.value("A14"), None)
+
+        # Verify Python generator produces the exact same rows on the same input data
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        for sheet, row, description, article, qty in rows:
+            ws = wb[sheet]
+            if description is not None:
+                ws[f"C{row}"] = description
+            ws[f"D{row}"] = article
+            ws[f"G{row}"] = qty
+        py_data = read_tkp_data(wb)
+        py_rows = build_preview_rows(py_data.sections)
+        vba_normalized = [
+            (v[0], v[1], v[2] or "", v[3], int(v[4]), v[5]) for v in values
+        ]
+        self.assertEqual(py_rows, vba_normalized)
 
         # A second run must clear old rows: the preview is regenerated, not appended.
         for sheet, row, *_ in rows:
@@ -103,7 +155,43 @@ class TKPTest(unittest.TestCase):
         app.run("ОбновитьСпецификациюТКП")
         self.assertEqual(preview.value("A1"), "№ п/п")
         self.assertEqual(preview.value("A2"), None)
-        self.assertEqual(preview.value("B11"), None)
+        self.assertEqual(preview.value("B13"), None)
+
+    def test_demo_result_document_and_python_build(self):
+        self.assertTrue(RESULT_DOCX.exists())
+        doc = docx.Document(str(RESULT_DOCX))
+        self.assertGreaterEqual(len(doc.tables), 3)
+        spec_tbl = doc.tables[2]
+        self.assertEqual(
+            [c.text.strip() for c in spec_tbl.rows[0].cells],
+            [
+                "№ п/п",
+                "Наименование и техническая характеристика",
+                "Артикул",
+                "Ед. изм.",
+                "Кол-во",
+            ],
+        )
+        self.assertEqual([c.text.strip() for c in spec_tbl.rows[1].cells], ["1", "2", "3", "4", "5"])
+        self.assertEqual(
+            [c.text.strip() for c in spec_tbl.rows[2].cells],
+            ["1.", "Программное обеспечение", "", "Компл.", "1"],
+        )
+        self.assertTrue(all(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[2].cells))
+        self.assertFalse(any(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[3].cells))
+
+        # Test generating from both .dotx and .docx templates into a temp directory
+        with TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.docx"
+            data = generate_tkp(
+                excel_source=WORKBOOK,
+                template_path=TEMPLATE,
+                output_path=out_path,
+                use_demo_if_empty=True,
+            )
+            self.assertTrue(out_path.exists())
+            self.assertEqual(len(data.sections), 7)
+            self.assertEqual(data.total_items, 16)
 
 
 if __name__ == "__main__":
