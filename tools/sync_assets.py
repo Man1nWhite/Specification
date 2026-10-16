@@ -1,4 +1,4 @@
-"""Embed Module1.bas, prepare Word templates (.dotx and .docx), and build demo output.
+"""Synchronize Module1.bas, the single .dotx template, and the Excel preview sheet.
 
 Run from the repository root with Python 3.10+ after installing requirements-dev.txt.
 Excel and Word are not required for this packaging step.
@@ -11,27 +11,13 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from zipfile import ZipFile, ZIP_DEFLATED
 import os
-import sys
 
 from lxml import etree
 from pyopenvba import ExcelFile
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from generate_tkp import (
-    DOCUMENT_CONTENT_TYPE,
-    TEMPLATE_CONTENT_TYPE,
-    generate_tkp,
-)
-
 WORKBOOK = ROOT / "Gen_TKP.xlsm"
 TEMPLATE_DOTX = ROOT / "ТКП_шаблон.dotx"
-TEMPLATE_DOCX = ROOT / "ТКП_шаблон.docx"
-TEMPLATE_KP_DOCX = ROOT / "Коммерческое предложение_шаблон.docx"
-SOURCE_DOCX = ROOT / "Коммерческое предложение.docx"
-RESULT_DOCX = ROOT / "Коммерческое предложение_результат.docx"
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 X_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -192,7 +178,7 @@ def _fix_notes_paragraph(notes: etree._Element) -> None:
 
 
 def patch_template() -> None:
-    """Update ТКП_шаблон.dotx and write .docx template copies."""
+    """Update the single ТКП_шаблон.dotx file in place."""
     with ZipFile(TEMPLATE_DOTX) as archive:
         document = etree.fromstring(archive.read("word/document.xml"))
         header = etree.fromstring(archive.read("word/header1.xml"))
@@ -229,68 +215,6 @@ def patch_template() -> None:
 
     replace_zip_part(
         TEMPLATE_DOTX,
-        {
-            "word/document.xml": write_xml(document),
-            "word/header1.xml": write_xml(header),
-            "word/settings.xml": write_xml(settings),
-        },
-        remove_members={"word/_rels/settings.xml.rels"},
-    )
-
-    # Also write .docx template variants with document.main+xml ContentType
-    for docx_target in (TEMPLATE_DOCX, TEMPLATE_KP_DOCX):
-        with ZipFile(TEMPLATE_DOTX, "r") as zin, ZipFile(docx_target, "w", ZIP_DEFLATED) as zout:
-            for info in zin.infolist():
-                data = zin.read(info.filename)
-                if info.filename == "[Content_Types].xml":
-                    data = (
-                        data.decode("utf-8")
-                        .replace(TEMPLATE_CONTENT_TYPE, DOCUMENT_CONTENT_TYPE)
-                        .encode("utf-8")
-                    )
-                zout.writestr(info, data)
-
-
-def patch_source_docx() -> None:
-    """Ensure Коммерческое предложение.docx has clean bookmarks and no broken template link."""
-    if not SOURCE_DOCX.exists():
-        return
-    with ZipFile(SOURCE_DOCX) as archive:
-        document = etree.fromstring(archive.read("word/document.xml"))
-        header = etree.fromstring(archive.read("word/header1.xml"))
-        settings = etree.fromstring(archive.read("word/settings.xml"))
-
-    for attached in settings.findall(W + "attachedTemplate"):
-        settings.remove(attached)
-
-    body = document.find(".//w:body", NS)
-    assert body is not None
-    note_paragraphs = [
-        p for p in body.findall("w:p", NS) if "римечания к Приложению" in word_text(p)
-    ]
-    if note_paragraphs:
-        _fix_notes_paragraph(note_paragraphs[0])
-
-    for name in ("Num", "Customer", "Object", "Subject"):
-        if document.xpath(".//w:bookmarkStart[@w:name=$name]", namespaces=NS, name=name):
-            remove_bookmark(document, name)
-    _apply_title_and_header_bookmarks(body, header)
-
-    # Ensure Spec_Table bookmark inside Table 4 has a clean matching bookmarkEnd
-    spec_starts = document.xpath(".//w:bookmarkStart[@w:name='Spec_Table']", namespaces=NS)
-    if spec_starts:
-        s = spec_starts[0]
-        p = s.getparent()
-        remove_bookmark(document, "Spec_Table")
-        if p is not None:
-            pPr = p.find(W + "pPr")
-            insert_idx = (list(p).index(pPr) + 1) if pPr is not None else 0
-            st, en = bookmark("Spec_Table", 26)
-            p.insert(insert_idx, en)
-            p.insert(insert_idx, st)
-
-    replace_zip_part(
-        SOURCE_DOCX,
         {
             "word/document.xml": write_xml(document),
             "word/header1.xml": write_xml(header),
@@ -380,13 +304,6 @@ def embed_macro() -> None:
 
 if __name__ == "__main__":
     patch_template()
-    patch_source_docx()
     patch_preview_sheet()
     embed_macro()
-    generate_tkp(
-        excel_source=WORKBOOK,
-        template_path=TEMPLATE_DOCX,
-        output_path=RESULT_DOCX,
-        use_demo_if_empty=True,
-    )
-    print("Updated templates, preview sheet, embedded VBA macro, and demo output document.")
+    print("Updated the .dotx template, Excel preview sheet, and embedded VBA macro.")

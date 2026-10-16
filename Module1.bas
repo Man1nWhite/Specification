@@ -122,17 +122,9 @@ Failed:
 End Sub
 
 Private Function НайтиШаблонТКП(ByVal baseFolder As String) As String
-    Dim candidates As Variant, i As Long, fullPath As String
-    candidates = Array("ТКП_шаблон.dotx", "ТКП_шаблон.docx", _
-                       "Коммерческое предложение_шаблон.docx", _
-                       "Коммерческое предложение.docx")
-    For i = LBound(candidates) To UBound(candidates)
-        fullPath = baseFolder & Application.PathSeparator & CStr(candidates(i))
-        If Len(Dir$(fullPath)) > 0 Then
-            НайтиШаблонТКП = fullPath
-            Exit Function
-        End If
-    Next i
+    Dim fullPath As String
+    fullPath = baseFolder & Application.PathSeparator & "ТКП_шаблон.dotx"
+    If Len(Dir$(fullPath)) > 0 Then НайтиШаблонТКП = fullPath
 End Function
 
 Private Function НайтиЛист(ByVal primaryName As String, Optional ByVal altName As String = "") As Worksheet

@@ -11,14 +11,16 @@ import openpyxl
 from pyopenvba import ExcelFile
 from pyopenvba.apps.excel import ExcelApplication
 
-from generate_tkp import build_preview_rows, generate_tkp, read_tkp_data
+from generate_tkp import (
+    build_preview_rows,
+    find_default_template,
+    generate_tkp,
+    read_tkp_data,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = ROOT / "Gen_TKP.xlsm"
 TEMPLATE = ROOT / "ТКП_шаблон.dotx"
-TEMPLATE_DOCX = ROOT / "ТКП_шаблон.docx"
-TEMPLATE_KP_DOCX = ROOT / "Коммерческое предложение_шаблон.docx"
-RESULT_DOCX = ROOT / "Коммерческое предложение_результат.docx"
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 M = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS = {"w": W}
@@ -32,37 +34,53 @@ class TKPTest(unittest.TestCase):
             actual = book.get_module("Module1").replace("\r\n", "\n").strip()
             self.assertEqual(actual, expected)
             self.assertIn("Module12", book.module_names())  # existing macros preserved
+        self.assertIn('"ТКП_шаблон.dotx"', expected)
+        self.assertNotIn("ТКП_шаблон.docx", expected)
+        self.assertNotIn("Коммерческое предложение_шаблон.docx", expected)
+        self.assertNotIn("Коммерческое предложение.docx", expected)
 
     def test_bookmarks_are_in_their_destination_not_the_notes(self):
-        for tpl_path in (TEMPLATE, TEMPLATE_DOCX, TEMPLATE_KP_DOCX):
-            with self.subTest(template=tpl_path.name):
-                self.assertTrue(tpl_path.exists())
-                with ZipFile(tpl_path) as archive:
-                    document = etree.fromstring(archive.read("word/document.xml"))
-                    header = etree.fromstring(archive.read("word/header1.xml"))
-                body = document.find(".//w:body", NS)
-                self.assertIsNotNone(body)
-                notes = next(
-                    p
-                    for p in body.findall("w:p", NS)
-                    if "Примечания к Приложению" in "".join(p.itertext())
-                )
-                target = {}
-                for name in ("Num", "Customer", "Object", "Subject", "Spec_Table"):
-                    starts = document.xpath(
-                        ".//w:bookmarkStart[@w:name=$name]", namespaces=NS, name=name
-                    )
-                    self.assertEqual(len(starts), 1)
-                    self.assertIsNot(starts[0].getparent(), notes)
-                    target[name] = starts[0]
-                self.assertLess(body.index(target["Spec_Table"].getparent()), body.index(notes))
-                self.assertEqual(
-                    len(header.xpath(".//w:bookmarkStart[@w:name='HeaderNum']", namespaces=NS)),
-                    1,
-                )
-                for name in ("Num", "Customer", "Object", "Subject"):
-                    self.assertEqual(target[name].getparent().tag, f"{{{W}}}p")
-                    self.assertEqual(target[name].getparent().getparent().tag, f"{{{W}}}tc")
+        self.assertTrue(TEMPLATE.exists())
+        with ZipFile(TEMPLATE) as archive:
+            document = etree.fromstring(archive.read("word/document.xml"))
+            header = etree.fromstring(archive.read("word/header1.xml"))
+        body = document.find(".//w:body", NS)
+        self.assertIsNotNone(body)
+        notes = next(
+            p
+            for p in body.findall("w:p", NS)
+            if "Примечания к Приложению" in "".join(p.itertext())
+        )
+        target = {}
+        for name in ("Num", "Customer", "Object", "Subject", "Spec_Table"):
+            starts = document.xpath(
+                ".//w:bookmarkStart[@w:name=$name]", namespaces=NS, name=name
+            )
+            self.assertEqual(len(starts), 1)
+            self.assertIsNot(starts[0].getparent(), notes)
+            target[name] = starts[0]
+        self.assertLess(body.index(target["Spec_Table"].getparent()), body.index(notes))
+        self.assertEqual(
+            len(header.xpath(".//w:bookmarkStart[@w:name='HeaderNum']", namespaces=NS)),
+            1,
+        )
+        for name in ("Num", "Customer", "Object", "Subject"):
+            self.assertEqual(target[name].getparent().tag, f"{{{W}}}p")
+            self.assertEqual(target[name].getparent().getparent().tag, f"{{{W}}}tc")
+
+    def test_default_template_is_only_the_dotx_asset(self):
+        self.assertEqual(find_default_template(ROOT), TEMPLATE)
+
+        with TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            for name in (
+                "ТКП_шаблон.docx",
+                "Коммерческое предложение_шаблон.docx",
+                "Коммерческое предложение.docx",
+            ):
+                (base_dir / name).touch()
+            with self.assertRaises(FileNotFoundError):
+                find_default_template(base_dir)
 
     def test_preview_has_only_the_standard_specification_columns(self):
         with ZipFile(WORKBOOK) as archive:
@@ -157,41 +175,40 @@ class TKPTest(unittest.TestCase):
         self.assertEqual(preview.value("A2"), None)
         self.assertEqual(preview.value("B13"), None)
 
-    def test_demo_result_document_and_python_build(self):
-        self.assertTrue(RESULT_DOCX.exists())
-        doc = docx.Document(str(RESULT_DOCX))
-        self.assertGreaterEqual(len(doc.tables), 3)
-        spec_tbl = doc.tables[2]
-        self.assertEqual(
-            [c.text.strip() for c in spec_tbl.rows[0].cells],
-            [
-                "№ п/п",
-                "Наименование и техническая характеристика",
-                "Артикул",
-                "Ед. изм.",
-                "Кол-во",
-            ],
-        )
-        self.assertEqual([c.text.strip() for c in spec_tbl.rows[1].cells], ["1", "2", "3", "4", "5"])
-        self.assertEqual(
-            [c.text.strip() for c in spec_tbl.rows[2].cells],
-            ["1.", "Программное обеспечение", "", "Компл.", "1"],
-        )
-        self.assertTrue(all(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[2].cells))
-        self.assertFalse(any(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[3].cells))
-
-        # Test generating from both .dotx and .docx templates into a temp directory
+    def test_python_build_from_dotx_template(self):
         with TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "out.docx"
             data = generate_tkp(
                 excel_source=WORKBOOK,
-                template_path=TEMPLATE,
                 output_path=out_path,
                 use_demo_if_empty=True,
             )
             self.assertTrue(out_path.exists())
             self.assertEqual(len(data.sections), 7)
             self.assertEqual(data.total_items, 16)
+
+            doc = docx.Document(str(out_path))
+            self.assertGreaterEqual(len(doc.tables), 3)
+            spec_tbl = doc.tables[2]
+            self.assertEqual(
+                [c.text.strip() for c in spec_tbl.rows[0].cells],
+                [
+                    "№ п/п",
+                    "Наименование и техническая характеристика",
+                    "Артикул",
+                    "Ед. изм.",
+                    "Кол-во",
+                ],
+            )
+            self.assertEqual(
+                [c.text.strip() for c in spec_tbl.rows[1].cells], ["1", "2", "3", "4", "5"]
+            )
+            self.assertEqual(
+                [c.text.strip() for c in spec_tbl.rows[2].cells],
+                ["1.", "Программное обеспечение", "", "Компл.", "1"],
+            )
+            self.assertTrue(all(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[2].cells))
+            self.assertFalse(any(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[3].cells))
 
 
 if __name__ == "__main__":
