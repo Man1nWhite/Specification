@@ -8,25 +8,25 @@ Can be used both as a library module and as a CLI script without Excel/Word COM.
 from __future__ import annotations
 
 import argparse
+import math
+import re
+import warnings
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from io import BytesIO
-import math
 from pathlib import Path
-import re
-from typing import Iterable
-import warnings
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import docx
+import openpyxl
 from docx.document import Document as DocxDocument
+from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from lxml import etree
-import openpyxl
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -120,7 +120,7 @@ def format_qty(qty: float) -> str:
     never reach it: %g would render 1234567.5 as "1.23457e+06".
     """
     if abs(qty - round(qty)) < 1e-9:
-        return str(int(round(qty)))
+        return str(round(qty))
     return f"{qty:.10f}".rstrip("0").rstrip(".")
 
 
@@ -368,7 +368,7 @@ def build_preview_rows(sections: Iterable[SpecSection]) -> list[tuple[str, str, 
         rows.append((f"{sec_idx}.", section.title, "", "Компл.", 1, "H"))
         for item_idx, item in enumerate(section.items, start=1):
             qty_val: float | int = (
-                int(round(item.qty)) if abs(item.qty - round(item.qty)) < 1e-9 else item.qty
+                round(item.qty) if abs(item.qty - round(item.qty)) < 1e-9 else item.qty
             )
             rows.append(
                 (f"{item_idx}.", item.description, item.article, item.unit, qty_val, "I")
@@ -501,9 +501,11 @@ def _style_cell(
     bold: bool = False,
     align: WD_ALIGN_PARAGRAPH = WD_ALIGN_PARAGRAPH.LEFT,
     bg_fill: str | None = None,
-    text_color: RGBColor = RGBColor(0x00, 0x00, 0x00),
+    text_color: RGBColor | None = None,
     width_pct: int | None = None,
 ) -> None:
+    if text_color is None:
+        text_color = RGBColor(0x00, 0x00, 0x00)
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
 

@@ -6,12 +6,12 @@ Excel and Word are not required for this packaging step.
 
 from __future__ import annotations
 
+import os
+import posixpath
 from copy import deepcopy
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from zipfile import ZipFile, ZIP_DEFLATED
-import os
-import posixpath
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from lxml import etree
 from pyopenvba import ExcelFile
@@ -208,9 +208,12 @@ def patch_template() -> None:
         remove_bookmark(document, name)
     if document.xpath(".//w:bookmarkStart[@w:name='Subject']", namespaces=NS):
         remove_bookmark(document, "Subject")
-    if old_spec_paragraph is not notes and not word_text(old_spec_paragraph):
-        if old_spec_paragraph.getparent() is body:
-            body.remove(old_spec_paragraph)
+    if (
+        old_spec_paragraph is not notes
+        and not word_text(old_spec_paragraph)
+        and old_spec_paragraph.getparent() is body
+    ):
+        body.remove(old_spec_paragraph)
 
     _apply_title_and_header_bookmarks(body, header)
 
@@ -299,6 +302,7 @@ def patch_preview_sheet() -> None:
     for letter, value in zip(
         "ABCDE",
         ("№ п/п", "Наименование и техническая характеристика", "Артикул", "Ед. изм.", "Кол-во"),
+        strict=True,
     ):
         first.append(inline_cell(letter + "1", value))
     first.append(inline_cell("G1", hints[0]))

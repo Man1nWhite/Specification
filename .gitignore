@@ -1,3 +1,14 @@
 __pycache__/
 *.py[cod]
 /Коммерческое предложение_результат.docx
+
+# Linter cache
+.ruff_cache/
+
+# Office lock and temporary files, created next to a file while it is open
+~$*
+*.tmp
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db

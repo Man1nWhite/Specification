@@ -1,13 +1,13 @@
 """Static packaging checks, headless VBA preview test, and Python generator tests."""
 
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from zipfile import ZipFile
 
 import docx
-from lxml import etree
 import openpyxl
+from lxml import etree
 from pyopenvba import ExcelFile
 from pyopenvba.apps.excel import ExcelApplication
 
