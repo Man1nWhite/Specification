@@ -27,6 +27,22 @@ NS = {"w": W}
 SHEET_NS = {"m": M}
 
 
+def normalise_preview_rows(rows):
+    """Normalise preview rows from either engine so they can be compared.
+
+    Excel returns every number as a float, so an integral quantity comes back as
+    2.0 where the Python generator builds 2. Collapsing integral floats keeps the
+    comparison faithful, unlike an int() cast, which would silently turn 2.9 into
+    2 and hide a real difference between the engines.
+    """
+    normalised = []
+    for num, description, article, unit, qty, marker in rows:
+        if isinstance(qty, float) and qty.is_integer():
+            qty = int(qty)
+        normalised.append((num, description, article or "", unit, qty, marker))
+    return normalised
+
+
 class TKPTest(unittest.TestCase):
     def test_embedded_source_matches_editable_source(self):
         expected = (ROOT / "Module1.bas").read_text(encoding="utf-8").replace("\r\n", "\n").strip()
@@ -174,6 +190,60 @@ class TKPTest(unittest.TestCase):
         self.assertEqual(preview.value("A1"), "№ п/п")
         self.assertEqual(preview.value("A2"), None)
         self.assertEqual(preview.value("B13"), None)
+
+    def _run_both(self, edits, last_row=14):
+        """Apply `edits` to both engines and return their normalised preview rows.
+
+        Each edit is (sheet, row, description, article, quantity) written into the
+        C/D/G columns. Neither engine writes to disk: pyopenvba interprets the VBA
+        in memory and openpyxl only mutates the loaded workbook.
+        """
+        app = ExcelApplication.open(WORKBOOK)
+        for sheet, row, description, article, qty in edits:
+            source = app.sheet(sheet)
+            source.set_value(f"C{row}", description)
+            source.set_value(f"D{row}", article)
+            source.set_value(f"G{row}", qty)
+        app.run("ОбновитьСпецификациюТКП")
+        preview = app.sheet("Спец_ТКП")
+        values = [
+            tuple(preview.value(f"{letter}{row}") for letter in "ABCDEF")
+            for row in range(2, last_row)
+        ]
+        vba_rows = normalise_preview_rows([v for v in values if v[1] is not None])
+
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        for sheet, row, description, article, qty in edits:
+            ws = wb[sheet]
+            ws[f"C{row}"] = description
+            ws[f"D{row}"] = article
+            ws[f"G{row}"] = qty
+        py_rows = normalise_preview_rows(build_preview_rows(read_tkp_data(wb).sections))
+        return vba_rows, py_rows
+
+    def test_total_and_margin_rows_are_skipped_in_both_engines(self):
+        """«Итого»/«МАРЖА» in the description column must never reach Appendix 3.
+
+        Regression (H1): the VBA implementation inspected the caption column (B)
+        only, so a total typed into column C was emitted as a normal line item.
+        """
+        # A total ends its block, so the ordinary positions are placed before it,
+        # matching the real sheet layout (rows 3-9, then «Итого…» on row 10).
+        vba_rows, py_rows = self._run_both(
+            [
+                ("1", 4, "Модуль ввода", "ART-1", 2),
+                ("1", 5, "Обычная позиция", "ART-2", 3),
+                ("1", 6, "Итого по шкафу", "ART-TOTAL", 5),
+                ("1", 7, "МАРЖА по шкафу", "ART-MARGIN", 7),
+            ]
+        )
+        self.assertEqual(vba_rows, py_rows)
+        descriptions = [row[1] for row in py_rows]
+        self.assertIn("Шкаф 1 ПТК", descriptions)
+        self.assertIn("Модуль ввода", descriptions)
+        self.assertIn("Обычная позиция", descriptions)
+        self.assertNotIn("Итого по шкафу", descriptions)
+        self.assertNotIn("МАРЖА по шкафу", descriptions)
 
     def test_python_build_from_dotx_template(self):
         with TemporaryDirectory() as tmp:

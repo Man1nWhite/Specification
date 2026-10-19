@@ -210,12 +210,13 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
 
     For r = 1 To lastRow
         caption = ЧистыйТекст(src.Cells(r, "B").Value2)
+        description = ЧистыйТекст(src.Cells(r, "C").Value2)
 
         If StrComp(Left$(caption, Len("Спецификация ")), "Спецификация ", vbTextCompare) = 0 Then
             currentBlock = НомерБлока(caption)
             hasCaptions = True
             If cabNo > 0 Then itemNo = 0
-        ElseIf StrComp(Left$(caption, Len("Итого")), "Итого", vbTextCompare) = 0 Then
+        ElseIf ЭтоСлужебнаяСтрока(caption, description) Then
             currentBlock = 0
         ElseIf StrComp(caption, "№ п/п", vbTextCompare) = 0 Then
             ' Table column header row — skip.
@@ -322,4 +323,14 @@ Private Function ЧистыйТекст(ByVal value As Variant) As String
     If IsError(value) Or IsNull(value) Or IsEmpty(value) Then Exit Function
     ЧистыйТекст = Trim$(Replace(Replace(Replace(Replace(CStr(value), _
                    vbCrLf, " "), vbCr, " "), vbLf, " "), vbTab, " "))
+End Function
+
+Private Function ЭтоСлужебнаяСтрока(ByVal caption As String, ByVal description As String) As Boolean
+    ' Totals and margin roll-ups never belong in Appendix 3. The generator stores
+    ' them either in the caption column (B) or in the description column (C), so
+    ' both columns have to be checked.
+    ЭтоСлужебнаяСтрока = _
+        StrComp(Left$(caption, Len("Итого")), "Итого", vbTextCompare) = 0 Or _
+        StrComp(Left$(description, Len("Итого")), "Итого", vbTextCompare) = 0 Or _
+        StrComp(Left$(description, Len("Маржа")), "Маржа", vbTextCompare) = 0
 End Function
