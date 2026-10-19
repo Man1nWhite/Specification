@@ -13,6 +13,7 @@ from pyopenvba.apps.excel import ExcelApplication
 
 from generate_tkp import (
     build_preview_rows,
+    clean_text,
     find_default_template,
     generate_tkp,
     read_tkp_data,
@@ -244,6 +245,28 @@ class TKPTest(unittest.TestCase):
         self.assertIn("Обычная позиция", descriptions)
         self.assertNotIn("Итого по шкафу", descriptions)
         self.assertNotIn("МАРЖА по шкафу", descriptions)
+
+    def test_hash_prefixed_values_survive_in_both_engines(self):
+        """A value starting with "#" is data, not an Excel error.
+
+        Regression (H2): clean_text() blanked every value beginning with "#", so
+        an article such as "#A-100" was silently dropped from the specification.
+        """
+        vba_rows, py_rows = self._run_both(
+            [
+                ("1", 4, "Контроллер", "#A-100", 3),
+                ("1", 5, "#1 Модуль", "ART-1", 2),
+                ("1", 6, "Позиция", "ART-2", 4),
+            ]
+        )
+        self.assertEqual(vba_rows, py_rows)
+        self.assertIn("#A-100", [row[2] for row in py_rows])
+        self.assertIn("#1 Модуль", [row[1] for row in py_rows])
+
+    def test_excel_error_literals_are_still_blanked(self):
+        """The error set must keep real Excel errors out of the document."""
+        for error in ("#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NUM!"):
+            self.assertEqual(clean_text(error), "")
 
     def test_python_build_from_dotx_template(self):
         with TemporaryDirectory() as tmp:

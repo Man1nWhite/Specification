@@ -50,6 +50,23 @@ SPEC_HEADERS = (
     "Кол-во",
 )
 
+# Excel error literals. These are blanked out wherever they appear; any other
+# value starting with "#" (a legitimate article such as "#A-100") is kept.
+EXCEL_ERRORS = frozenset(
+    {
+        "#REF!",
+        "#N/A",
+        "#VALUE!",
+        "#DIV/0!",
+        "#NAME?",
+        "#NULL!",
+        "#NUM!",
+        "#SPILL!",
+        "#CALC!",
+        "#GETTING_DATA",
+    }
+)
+
 
 @dataclass
 class SpecItem:
@@ -91,7 +108,7 @@ def clean_text(value: object) -> str:
     for ch in ("\r\n", "\r", "\n", "\t"):
         text = text.replace(ch, " ")
     text = text.strip()
-    if text.startswith("#"):
+    if text in EXCEL_ERRORS:
         return ""
     return text
 
@@ -161,7 +178,7 @@ def _eval_cell(
             t_val = wb_val[target_sheet] if (wb_val is not None and target_sheet in wb_val.sheetnames) else None
             col_idx = openpyxl.utils.column_index_from_string(col_letters)
             resolved = _eval_cell(t_val, t_fml, wb_val, wb_fml, int(row_digits), col_idx)
-            if resolved is not None and not (isinstance(resolved, str) and resolved.startswith("#")):
+            if resolved is not None and not (isinstance(resolved, str) and resolved in EXCEL_ERRORS):
                 return resolved
 
     if "SUMIF(" in upper_fml and ws_fml is not None and wb_fml is not None:
@@ -193,7 +210,7 @@ def _parse_numeric_qty(raw_qty: object) -> float:
         return float(raw_qty) if not math.isnan(float(raw_qty)) else 0.0
     if isinstance(raw_qty, str):
         text = raw_qty.strip().replace(",", ".")
-        if not text or text.startswith("#") or text.startswith("="):
+        if not text or text in EXCEL_ERRORS or text.startswith("="):
             return 0.0
         try:
             return float(text)
@@ -242,7 +259,9 @@ def _collect_section_items(
             if qty > 0:
                 article = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, r, 4))
                 unit = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, r, 6))
-                if not description or description == "0" or description.startswith("#"):
+                # clean_text() already blanked Excel errors, so only an empty
+                # description or a literal "0" needs the article fallback.
+                if not description or description == "0":
                     description = article
                 if not unit:
                     unit = "шт."

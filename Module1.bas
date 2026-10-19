@@ -241,8 +241,9 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
                             unit = ЧистыйТекст(src.Cells(r, "F").Value2)
 
                             ' Some NVT descriptions still have broken #REF! price-list lookups.
-                            ' Keep the position in the specification by using its article.
-                            If Len(description) = 0 Or description = "0" Or Left$(description, 1) = "#" Then
+                            ' ЧистыйТекст already blanks Excel error literals, so only an
+                            ' empty description or a literal "0" needs the article fallback.
+                            If Len(description) = 0 Or description = "0" Then
                                 description = article
                             End If
                             If Len(unit) = 0 Then unit = "шт."
@@ -323,6 +324,18 @@ Private Function ЧистыйТекст(ByVal value As Variant) As String
     If IsError(value) Or IsNull(value) Or IsEmpty(value) Then Exit Function
     ЧистыйТекст = Trim$(Replace(Replace(Replace(Replace(CStr(value), _
                    vbCrLf, " "), vbCr, " "), vbLf, " "), vbTab, " "))
+    If ЭтоОшибкаExcel(ЧистыйТекст) Then ЧистыйТекст = ""
+End Function
+
+Private Function ЭтоОшибкаExcel(ByVal value As String) As Boolean
+    ' Excel error literals, which must be treated as empty even when a workbook
+    ' only caches them as text. Anything else beginning with "#" (an article such
+    ' as "#A-100") is a legitimate value and is kept.
+    Select Case value
+        Case "#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?", "#NULL!", "#NUM!", _
+             "#SPILL!", "#CALC!", "#GETTING_DATA"
+            ЭтоОшибкаExcel = True
+    End Select
 End Function
 
 Private Function ЭтоСлужебнаяСтрока(ByVal caption As String, ByVal description As String) As Boolean
