@@ -327,7 +327,7 @@ def read_tkp_data(excel_source: str | Path | Workbook) -> TKPData:
             sections.append(SpecSection(title="Программное обеспечение", items=sw_items))
 
     # 2. Cabinets 1..17 — 3 blocks per cabinet sheet
-    block_Defs = (
+    block_defs = (
         (1, "ПТК"),
         (2, "телекоммуникационное оборудование"),
         (3, "шкафное оборудование"),
@@ -339,7 +339,7 @@ def read_tkp_data(excel_source: str | Path | Workbook) -> TKPData:
         )
         if cab_fml is None:
             continue
-        for block_no, suffix in block_Defs:
+        for block_no, suffix in block_defs:
             cab_items = _collect_section_items(
                 cab_val, cab_fml, wb_val, wb_fml, target_block=block_no
             )

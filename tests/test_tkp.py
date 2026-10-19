@@ -25,9 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = ROOT / "Gen_TKP.xlsm"
 TEMPLATE = ROOT / "ТКП_шаблон.dotx"
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-M = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS = {"w": W}
-SHEET_NS = {"m": M}
 
 
 def normalise_preview_rows(rows):
@@ -102,13 +100,13 @@ class TKPTest(unittest.TestCase):
                 find_default_template(base_dir)
 
     def test_preview_has_only_the_standard_specification_columns(self):
-        with ZipFile(WORKBOOK) as archive:
-            sheet = etree.fromstring(archive.read("xl/worksheets/sheet26.xml"))
-        header = sheet.xpath(".//m:c[@r='A1']//m:t/text()", namespaces=SHEET_NS)
-        self.assertEqual(header, ["№ п/п"])
-        helper_column = sheet.xpath(".//m:col[@min='6' and @max='6']", namespaces=SHEET_NS)
-        self.assertEqual(len(helper_column), 1)
-        self.assertEqual(helper_column[0].get("hidden"), "1")
+        # Read the sheet by name: "xl/worksheets/sheet26.xml" would silently point
+        # at an unrelated worksheet after any insert, removal or reordering.
+        wb = openpyxl.load_workbook(WORKBOOK)
+        self.assertIn("Спец_ТКП", wb.sheetnames)
+        preview = wb["Спец_ТКП"]
+        self.assertEqual(preview["A1"].value, "№ п/п")
+        self.assertTrue(preview.column_dimensions["F"].hidden)
 
         source = (ROOT / "Module1.bas").read_text(encoding="utf-8")
         self.assertNotIn('"Тип"', source)
@@ -181,10 +179,9 @@ class TKPTest(unittest.TestCase):
             ws[f"G{row}"] = qty
         py_data = read_tkp_data(wb)
         py_rows = build_preview_rows(py_data.sections)
-        vba_normalized = [
-            (v[0], v[1], v[2] or "", v[3], int(v[4]), v[5]) for v in values
-        ]
-        self.assertEqual(py_rows, vba_normalized)
+        self.assertEqual(
+            normalise_preview_rows(py_rows), normalise_preview_rows(values)
+        )
 
         # A second run must clear old rows: the preview is regenerated, not appended.
         for sheet, row, *_ in rows:

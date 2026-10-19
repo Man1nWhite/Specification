@@ -322,6 +322,7 @@ End Function
 
 Private Function ЧистыйТекст(ByVal value As Variant) As String
     If IsError(value) Or IsNull(value) Or IsEmpty(value) Then Exit Function
+    If VarType(value) = vbBoolean Then Exit Function ' A boolean carries no specification text.
     ЧистыйТекст = Trim$(Replace(Replace(Replace(Replace(CStr(value), _
                    vbCrLf, " "), vbCr, " "), vbLf, " "), vbTab, " "))
     If ЭтоОшибкаExcel(ЧистыйТекст) Then ЧистыйТекст = ""
