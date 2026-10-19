@@ -1,0 +1,26 @@
+# Pinned so local runs and CI agree regardless of the installed ruff version.
+target-version = "py310"
+line-length = 120
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "EXE", # flake8-executable
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    # The project is Russian-language, so Cyrillic in strings and comments is
+    # expected: these two rules only flag Cyrillic letters that look like Latin.
+    "RUF001",
+    "RUF003",
+]
+
+[lint.per-file-ignores]
+# The tests deliberately exercise private helpers (_eval_cell) and compare the
+# two engines, so their assertions are intentionally fine-grained.
+"tests/*" = ["PT009", "PT018", "PT027"]

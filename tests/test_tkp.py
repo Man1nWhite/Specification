@@ -1,19 +1,22 @@
 """Static packaging checks, headless VBA preview test, and Python generator tests."""
 
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from zipfile import ZipFile
 
 import docx
-from lxml import etree
 import openpyxl
+from lxml import etree
 from pyopenvba import ExcelFile
 from pyopenvba.apps.excel import ExcelApplication
 
 from generate_tkp import (
+    _eval_cell,
     build_preview_rows,
+    clean_text,
     find_default_template,
+    format_qty,
     generate_tkp,
     read_tkp_data,
 )
@@ -22,9 +25,23 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = ROOT / "Gen_TKP.xlsm"
 TEMPLATE = ROOT / "ТКП_шаблон.dotx"
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-M = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS = {"w": W}
-SHEET_NS = {"m": M}
+
+
+def normalise_preview_rows(rows):
+    """Normalise preview rows from either engine so they can be compared.
+
+    Excel returns every number as a float, so an integral quantity comes back as
+    2.0 where the Python generator builds 2. Collapsing integral floats keeps the
+    comparison faithful, unlike an int() cast, which would silently turn 2.9 into
+    2 and hide a real difference between the engines.
+    """
+    normalised = []
+    for num, description, article, unit, qty, marker in rows:
+        if isinstance(qty, float) and qty.is_integer():
+            qty = int(qty)
+        normalised.append((num, description, article or "", unit, qty, marker))
+    return normalised
 
 
 class TKPTest(unittest.TestCase):
@@ -83,13 +100,13 @@ class TKPTest(unittest.TestCase):
                 find_default_template(base_dir)
 
     def test_preview_has_only_the_standard_specification_columns(self):
-        with ZipFile(WORKBOOK) as archive:
-            sheet = etree.fromstring(archive.read("xl/worksheets/sheet26.xml"))
-        header = sheet.xpath(".//m:c[@r='A1']//m:t/text()", namespaces=SHEET_NS)
-        self.assertEqual(header, ["№ п/п"])
-        helper_column = sheet.xpath(".//m:col[@min='6' and @max='6']", namespaces=SHEET_NS)
-        self.assertEqual(len(helper_column), 1)
-        self.assertEqual(helper_column[0].get("hidden"), "1")
+        # Read the sheet by name: "xl/worksheets/sheet26.xml" would silently point
+        # at an unrelated worksheet after any insert, removal or reordering.
+        wb = openpyxl.load_workbook(WORKBOOK)
+        self.assertIn("Спец_ТКП", wb.sheetnames)
+        preview = wb["Спец_ТКП"]
+        self.assertEqual(preview["A1"].value, "№ п/п")
+        self.assertTrue(preview.column_dimensions["F"].hidden)
 
         source = (ROOT / "Module1.bas").read_text(encoding="utf-8")
         self.assertNotIn('"Тип"', source)
@@ -162,10 +179,9 @@ class TKPTest(unittest.TestCase):
             ws[f"G{row}"] = qty
         py_data = read_tkp_data(wb)
         py_rows = build_preview_rows(py_data.sections)
-        vba_normalized = [
-            (v[0], v[1], v[2] or "", v[3], int(v[4]), v[5]) for v in values
-        ]
-        self.assertEqual(py_rows, vba_normalized)
+        self.assertEqual(
+            normalise_preview_rows(py_rows), normalise_preview_rows(values)
+        )
 
         # A second run must clear old rows: the preview is regenerated, not appended.
         for sheet, row, *_ in rows:
@@ -174,6 +190,116 @@ class TKPTest(unittest.TestCase):
         self.assertEqual(preview.value("A1"), "№ п/п")
         self.assertEqual(preview.value("A2"), None)
         self.assertEqual(preview.value("B13"), None)
+
+    def _run_both(self, edits, last_row=14):
+        """Apply `edits` to both engines and return their normalised preview rows.
+
+        Each edit is (sheet, row, description, article, quantity) written into the
+        C/D/G columns. Neither engine writes to disk: pyopenvba interprets the VBA
+        in memory and openpyxl only mutates the loaded workbook.
+        """
+        app = ExcelApplication.open(WORKBOOK)
+        for sheet, row, description, article, qty in edits:
+            source = app.sheet(sheet)
+            source.set_value(f"C{row}", description)
+            source.set_value(f"D{row}", article)
+            source.set_value(f"G{row}", qty)
+        app.run("ОбновитьСпецификациюТКП")
+        preview = app.sheet("Спец_ТКП")
+        values = [
+            tuple(preview.value(f"{letter}{row}") for letter in "ABCDEF")
+            for row in range(2, last_row)
+        ]
+        vba_rows = normalise_preview_rows([v for v in values if v[1] is not None])
+
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        for sheet, row, description, article, qty in edits:
+            ws = wb[sheet]
+            ws[f"C{row}"] = description
+            ws[f"D{row}"] = article
+            ws[f"G{row}"] = qty
+        py_rows = normalise_preview_rows(build_preview_rows(read_tkp_data(wb).sections))
+        return vba_rows, py_rows
+
+    def test_total_and_margin_rows_are_skipped_in_both_engines(self):
+        """«Итого»/«МАРЖА» in the description column must never reach Appendix 3.
+
+        Regression (H1): the VBA implementation inspected the caption column (B)
+        only, so a total typed into column C was emitted as a normal line item.
+        """
+        # A total ends its block, so the ordinary positions are placed before it,
+        # matching the real sheet layout (rows 3-9, then «Итого…» on row 10).
+        vba_rows, py_rows = self._run_both(
+            [
+                ("1", 4, "Модуль ввода", "ART-1", 2),
+                ("1", 5, "Обычная позиция", "ART-2", 3),
+                ("1", 6, "Итого по шкафу", "ART-TOTAL", 5),
+                ("1", 7, "МАРЖА по шкафу", "ART-MARGIN", 7),
+            ]
+        )
+        self.assertEqual(vba_rows, py_rows)
+        descriptions = [row[1] for row in py_rows]
+        self.assertIn("Шкаф 1 ПТК", descriptions)
+        self.assertIn("Модуль ввода", descriptions)
+        self.assertIn("Обычная позиция", descriptions)
+        self.assertNotIn("Итого по шкафу", descriptions)
+        self.assertNotIn("МАРЖА по шкафу", descriptions)
+
+    def test_hash_prefixed_values_survive_in_both_engines(self):
+        """A value starting with "#" is data, not an Excel error.
+
+        Regression (H2): clean_text() blanked every value beginning with "#", so
+        an article such as "#A-100" was silently dropped from the specification.
+        """
+        vba_rows, py_rows = self._run_both(
+            [
+                ("1", 4, "Контроллер", "#A-100", 3),
+                ("1", 5, "#1 Модуль", "ART-1", 2),
+                ("1", 6, "Позиция", "ART-2", 4),
+            ]
+        )
+        self.assertEqual(vba_rows, py_rows)
+        self.assertIn("#A-100", [row[2] for row in py_rows])
+        self.assertIn("#1 Модуль", [row[1] for row in py_rows])
+
+    def test_excel_error_literals_are_still_blanked(self):
+        """The error set must keep real Excel errors out of the document."""
+        for error in ("#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NUM!"):
+            self.assertEqual(clean_text(error), "")
+
+    def test_format_qty_is_always_plain_decimal(self):
+        """Quantities must never reach the document in scientific notation.
+
+        Regression (M1): %g renders 1234567.5 as "1.23457e+06" and truncates to
+        six significant digits.
+        """
+        self.assertEqual(format_qty(1), "1")
+        self.assertEqual(format_qty(50), "50")
+        self.assertEqual(format_qty(2.5), "2.5")
+        self.assertEqual(format_qty(0.3), "0.3")
+        self.assertEqual(format_qty(1234567.5), "1234567.5")
+        self.assertEqual(format_qty(10000000.5), "10000000.5")
+        for value in (2.5, 1 / 3, 1234567.5, 10000000.5, 0.1 + 0.2):
+            self.assertNotIn("e", format_qty(value).lower())
+
+    def test_circular_reference_resolves_to_empty(self):
+        """A reference cycle degrades to a blank value instead of crashing.
+
+        Regression (M3): _eval_cell() recursed without a guard, so two cells that
+        point at each other raised an unhandled RecursionError.
+        """
+        wb = openpyxl.Workbook()
+        wb.active.title = "Наценки-Скидки"
+        first = wb.create_sheet("X")
+        second = wb.create_sheet("Y")
+        first["C1"] = "=Y!C1"
+        second["C1"] = "=X!C1"
+        self.assertEqual(_eval_cell(first, first, wb, wb, 1, 3), "")
+
+        # A ordinary reference chain must still resolve.
+        first["C1"] = "=Наценки-Скидки!C2"
+        wb["Наценки-Скидки"]["C2"] = "Значение"
+        self.assertEqual(_eval_cell(first, first, wb, wb, 1, 3), "Значение")
 
     def test_python_build_from_dotx_template(self):
         with TemporaryDirectory() as tmp:

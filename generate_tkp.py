@@ -8,25 +8,25 @@ Can be used both as a library module and as a CLI script without Excel/Word COM.
 from __future__ import annotations
 
 import argparse
+import math
+import re
+import warnings
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from io import BytesIO
-import math
 from pathlib import Path
-import re
-from typing import Iterable
-import warnings
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import docx
+import openpyxl
 from docx.document import Document as DocxDocument
+from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from lxml import etree
-import openpyxl
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -48,6 +48,23 @@ SPEC_HEADERS = (
     "Артикул",
     "Ед. изм.",
     "Кол-во",
+)
+
+# Excel error literals. These are blanked out wherever they appear; any other
+# value starting with "#" (a legitimate article such as "#A-100") is kept.
+EXCEL_ERRORS = frozenset(
+    {
+        "#REF!",
+        "#N/A",
+        "#VALUE!",
+        "#DIV/0!",
+        "#NAME?",
+        "#NULL!",
+        "#NUM!",
+        "#SPILL!",
+        "#CALC!",
+        "#GETTING_DATA",
+    }
 )
 
 
@@ -91,16 +108,20 @@ def clean_text(value: object) -> str:
     for ch in ("\r\n", "\r", "\n", "\t"):
         text = text.replace(ch, " ")
     text = text.strip()
-    if text.startswith("#"):
+    if text in EXCEL_ERRORS:
         return ""
     return text
 
 
-def format_qty(qty: float | int) -> str:
-    """Format numeric quantity without trailing .0 for integer values."""
+def format_qty(qty: float) -> str:
+    """Format a quantity as plain decimal notation, without trailing zeros.
+
+    The document is a customer-facing proposal, so scientific notation must
+    never reach it: %g would render 1234567.5 as "1.23457e+06".
+    """
     if abs(qty - round(qty)) < 1e-9:
-        return str(int(round(qty)))
-    return f"{qty:g}"
+        return str(round(qty))
+    return f"{qty:.10f}".rstrip("0").rstrip(".")
 
 
 def _find_sheet(wb: Workbook, *names: str) -> Worksheet | None:
@@ -141,8 +162,20 @@ def _eval_cell(
     wb_fml: Workbook | None,
     row: int,
     col: int,
+    _seen: frozenset[tuple[str, int, int]] = frozenset(),
 ) -> object:
-    """Evaluate a cell from either a dual (values, formulas) workbook pair or single workbook."""
+    """Evaluate a cell from either a dual (values, formulas) workbook pair or single workbook.
+
+    ``_seen`` holds the (sheet, row, column) keys currently being resolved. A cell
+    that is already on the stack resolves to "" instead of recursing forever, so a
+    circular reference degrades to an empty value rather than a RecursionError.
+    """
+    if ws_fml is not None:
+        key = (ws_fml.title, row, col)
+        if key in _seen:
+            return ""
+        _seen = _seen | {key}
+
     raw_fml = ws_fml.cell(row, col).value if ws_fml is not None else None
     raw_val = ws_val.cell(row, col).value if ws_val is not None else None
 
@@ -160,12 +193,14 @@ def _eval_cell(
             t_fml = wb_fml[target_sheet]
             t_val = wb_val[target_sheet] if (wb_val is not None and target_sheet in wb_val.sheetnames) else None
             col_idx = openpyxl.utils.column_index_from_string(col_letters)
-            resolved = _eval_cell(t_val, t_fml, wb_val, wb_fml, int(row_digits), col_idx)
-            if resolved is not None and not (isinstance(resolved, str) and resolved.startswith("#")):
+            resolved = _eval_cell(
+                t_val, t_fml, wb_val, wb_fml, int(row_digits), col_idx, _seen
+            )
+            if resolved is not None and not (isinstance(resolved, str) and resolved in EXCEL_ERRORS):
                 return resolved
 
     if "SUMIF(" in upper_fml and ws_fml is not None and wb_fml is not None:
-        article = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, row, 4))
+        article = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, row, 4, _seen))
         if not article:
             return 0
         total_qty = 0.0
@@ -176,9 +211,9 @@ def _eval_cell(
             c_fml = wb_fml[sname]
             c_val = wb_val[sname] if (wb_val is not None and sname in wb_val.sheetnames) else None
             for r in range(3, min(c_fml.max_row + 1, 101)):
-                d_val = clean_text(_eval_cell(c_val, c_fml, wb_val, wb_fml, r, 4))
+                d_val = clean_text(_eval_cell(c_val, c_fml, wb_val, wb_fml, r, 4, _seen))
                 if d_val.lower() == article.lower():
-                    g_val = _eval_cell(c_val, c_fml, wb_val, wb_fml, r, 7)
+                    g_val = _eval_cell(c_val, c_fml, wb_val, wb_fml, r, 7, _seen)
                     if isinstance(g_val, (int, float)) and not isinstance(g_val, bool):
                         total_qty += float(g_val)
         return math.ceil(total_qty / 10.0) if total_qty > 0 else 0
@@ -193,7 +228,7 @@ def _parse_numeric_qty(raw_qty: object) -> float:
         return float(raw_qty) if not math.isnan(float(raw_qty)) else 0.0
     if isinstance(raw_qty, str):
         text = raw_qty.strip().replace(",", ".")
-        if not text or text.startswith("#") or text.startswith("="):
+        if not text or text in EXCEL_ERRORS or text.startswith("="):
             return 0.0
         try:
             return float(text)
@@ -242,7 +277,9 @@ def _collect_section_items(
             if qty > 0:
                 article = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, r, 4))
                 unit = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, r, 6))
-                if not description or description == "0" or description.startswith("#"):
+                # clean_text() already blanked Excel errors, so only an empty
+                # description or a literal "0" needs the article fallback.
+                if not description or description == "0":
                     description = article
                 if not unit:
                     unit = "шт."
@@ -290,7 +327,7 @@ def read_tkp_data(excel_source: str | Path | Workbook) -> TKPData:
             sections.append(SpecSection(title="Программное обеспечение", items=sw_items))
 
     # 2. Cabinets 1..17 — 3 blocks per cabinet sheet
-    block_Defs = (
+    block_defs = (
         (1, "ПТК"),
         (2, "телекоммуникационное оборудование"),
         (3, "шкафное оборудование"),
@@ -302,7 +339,7 @@ def read_tkp_data(excel_source: str | Path | Workbook) -> TKPData:
         )
         if cab_fml is None:
             continue
-        for block_no, suffix in block_Defs:
+        for block_no, suffix in block_defs:
             cab_items = _collect_section_items(
                 cab_val, cab_fml, wb_val, wb_fml, target_block=block_no
             )
@@ -331,7 +368,7 @@ def build_preview_rows(sections: Iterable[SpecSection]) -> list[tuple[str, str, 
         rows.append((f"{sec_idx}.", section.title, "", "Компл.", 1, "H"))
         for item_idx, item in enumerate(section.items, start=1):
             qty_val: float | int = (
-                int(round(item.qty)) if abs(item.qty - round(item.qty)) < 1e-9 else item.qty
+                round(item.qty) if abs(item.qty - round(item.qty)) < 1e-9 else item.qty
             )
             rows.append(
                 (f"{item_idx}.", item.description, item.article, item.unit, qty_val, "I")
@@ -464,9 +501,11 @@ def _style_cell(
     bold: bool = False,
     align: WD_ALIGN_PARAGRAPH = WD_ALIGN_PARAGRAPH.LEFT,
     bg_fill: str | None = None,
-    text_color: RGBColor = RGBColor(0x00, 0x00, 0x00),
+    text_color: RGBColor | None = None,
     width_pct: int | None = None,
 ) -> None:
+    if text_color is None:
+        text_color = RGBColor(0x00, 0x00, 0x00)
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
 

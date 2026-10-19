@@ -6,11 +6,12 @@ Excel and Word are not required for this packaging step.
 
 from __future__ import annotations
 
+import os
+import posixpath
 from copy import deepcopy
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from zipfile import ZipFile, ZIP_DEFLATED
-import os
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from lxml import etree
 from pyopenvba import ExcelFile
@@ -21,9 +22,13 @@ TEMPLATE_DOTX = ROOT / "ТКП_шаблон.dotx"
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 X_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 W = f"{{{W_NS}}}"
 X = f"{{{X_NS}}}"
 NS = {"w": W_NS}
+
+PREVIEW_SHEET = "Спец_ТКП"
 
 
 def replace_zip_part(
@@ -203,9 +208,12 @@ def patch_template() -> None:
         remove_bookmark(document, name)
     if document.xpath(".//w:bookmarkStart[@w:name='Subject']", namespaces=NS):
         remove_bookmark(document, "Subject")
-    if old_spec_paragraph is not notes and not word_text(old_spec_paragraph):
-        if old_spec_paragraph.getparent() is body:
-            body.remove(old_spec_paragraph)
+    if (
+        old_spec_paragraph is not notes
+        and not word_text(old_spec_paragraph)
+        and old_spec_paragraph.getparent() is body
+    ):
+        body.remove(old_spec_paragraph)
 
     _apply_title_and_header_bookmarks(body, header)
 
@@ -230,9 +238,36 @@ def inline_cell(address: str, text: str) -> etree._Element:
     return cell
 
 
+def preview_sheet_part(sheet_name: str = PREVIEW_SHEET) -> str:
+    """Return the ZIP part holding `sheet_name`, resolved through the workbook rels.
+
+    Addressing the part by index (for example sheet26.xml) would silently edit an
+    unrelated worksheet as soon as a sheet is inserted, removed or reordered.
+    """
+    with ZipFile(WORKBOOK) as archive:
+        book = etree.fromstring(archive.read("xl/workbook.xml"))
+        rels = etree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+
+    sheets = book.xpath(
+        ".//x:sheet[@name=$name]", namespaces={"x": X_NS}, name=sheet_name
+    )
+    if len(sheets) != 1:
+        raise ValueError(f"Expected one worksheet named {sheet_name!r}, found {len(sheets)}")
+    rel_id = sheets[0].get(f"{{{R_NS}}}id")
+    targets = rels.xpath(
+        ".//r:Relationship[@Id=$rel_id]", namespaces={"r": PKG_REL_NS}, rel_id=rel_id
+    )
+    if len(targets) != 1:
+        raise ValueError(f"No relationship {rel_id!r} for worksheet {sheet_name!r}")
+    target = targets[0].get("Target").lstrip("/")
+    return posixpath.normpath(
+        target if target.startswith("xl/") else posixpath.join("xl", target)
+    )
+
+
 def patch_preview_sheet() -> None:
     """Initialize the preview and keep its helper marker column hidden."""
-    part = "xl/worksheets/sheet26.xml"
+    part = preview_sheet_part()
     with ZipFile(WORKBOOK) as archive:
         root = etree.fromstring(archive.read(part))
     data = root.find(X + "sheetData")
@@ -267,6 +302,7 @@ def patch_preview_sheet() -> None:
     for letter, value in zip(
         "ABCDE",
         ("№ п/п", "Наименование и техническая характеристика", "Артикул", "Ед. изм.", "Кол-во"),
+        strict=True,
     ):
         first.append(inline_cell(letter + "1", value))
     first.append(inline_cell("G1", hints[0]))

@@ -210,12 +210,13 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
 
     For r = 1 To lastRow
         caption = ЧистыйТекст(src.Cells(r, "B").Value2)
+        description = ЧистыйТекст(src.Cells(r, "C").Value2)
 
         If StrComp(Left$(caption, Len("Спецификация ")), "Спецификация ", vbTextCompare) = 0 Then
             currentBlock = НомерБлока(caption)
             hasCaptions = True
             If cabNo > 0 Then itemNo = 0
-        ElseIf StrComp(Left$(caption, Len("Итого")), "Итого", vbTextCompare) = 0 Then
+        ElseIf ЭтоСлужебнаяСтрока(caption, description) Then
             currentBlock = 0
         ElseIf StrComp(caption, "№ п/п", vbTextCompare) = 0 Then
             ' Table column header row — skip.
@@ -240,8 +241,9 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
                             unit = ЧистыйТекст(src.Cells(r, "F").Value2)
 
                             ' Some NVT descriptions still have broken #REF! price-list lookups.
-                            ' Keep the position in the specification by using its article.
-                            If Len(description) = 0 Or description = "0" Or Left$(description, 1) = "#" Then
+                            ' ЧистыйТекст already blanks Excel error literals, so only an
+                            ' empty description or a literal "0" needs the article fallback.
+                            If Len(description) = 0 Or description = "0" Then
                                 description = article
                             End If
                             If Len(unit) = 0 Then unit = "шт."
@@ -320,6 +322,29 @@ End Function
 
 Private Function ЧистыйТекст(ByVal value As Variant) As String
     If IsError(value) Or IsNull(value) Or IsEmpty(value) Then Exit Function
+    If VarType(value) = vbBoolean Then Exit Function ' A boolean carries no specification text.
     ЧистыйТекст = Trim$(Replace(Replace(Replace(Replace(CStr(value), _
                    vbCrLf, " "), vbCr, " "), vbLf, " "), vbTab, " "))
+    If ЭтоОшибкаExcel(ЧистыйТекст) Then ЧистыйТекст = ""
+End Function
+
+Private Function ЭтоОшибкаExcel(ByVal value As String) As Boolean
+    ' Excel error literals, which must be treated as empty even when a workbook
+    ' only caches them as text. Anything else beginning with "#" (an article such
+    ' as "#A-100") is a legitimate value and is kept.
+    Select Case value
+        Case "#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?", "#NULL!", "#NUM!", _
+             "#SPILL!", "#CALC!", "#GETTING_DATA"
+            ЭтоОшибкаExcel = True
+    End Select
+End Function
+
+Private Function ЭтоСлужебнаяСтрока(ByVal caption As String, ByVal description As String) As Boolean
+    ' Totals and margin roll-ups never belong in Appendix 3. The generator stores
+    ' them either in the caption column (B) or in the description column (C), so
+    ' both columns have to be checked.
+    ЭтоСлужебнаяСтрока = _
+        StrComp(Left$(caption, Len("Итого")), "Итого", vbTextCompare) = 0 Or _
+        StrComp(Left$(description, Len("Итого")), "Итого", vbTextCompare) = 0 Or _
+        StrComp(Left$(description, Len("Маржа")), "Маржа", vbTextCompare) = 0
 End Function
