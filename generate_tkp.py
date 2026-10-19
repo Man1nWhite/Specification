@@ -113,11 +113,15 @@ def clean_text(value: object) -> str:
     return text
 
 
-def format_qty(qty: float | int) -> str:
-    """Format numeric quantity without trailing .0 for integer values."""
+def format_qty(qty: float) -> str:
+    """Format a quantity as plain decimal notation, without trailing zeros.
+
+    The document is a customer-facing proposal, so scientific notation must
+    never reach it: %g would render 1234567.5 as "1.23457e+06".
+    """
     if abs(qty - round(qty)) < 1e-9:
         return str(int(round(qty)))
-    return f"{qty:g}"
+    return f"{qty:.10f}".rstrip("0").rstrip(".")
 
 
 def _find_sheet(wb: Workbook, *names: str) -> Worksheet | None:
@@ -158,8 +162,20 @@ def _eval_cell(
     wb_fml: Workbook | None,
     row: int,
     col: int,
+    _seen: frozenset[tuple[str, int, int]] = frozenset(),
 ) -> object:
-    """Evaluate a cell from either a dual (values, formulas) workbook pair or single workbook."""
+    """Evaluate a cell from either a dual (values, formulas) workbook pair or single workbook.
+
+    ``_seen`` holds the (sheet, row, column) keys currently being resolved. A cell
+    that is already on the stack resolves to "" instead of recursing forever, so a
+    circular reference degrades to an empty value rather than a RecursionError.
+    """
+    if ws_fml is not None:
+        key = (ws_fml.title, row, col)
+        if key in _seen:
+            return ""
+        _seen = _seen | {key}
+
     raw_fml = ws_fml.cell(row, col).value if ws_fml is not None else None
     raw_val = ws_val.cell(row, col).value if ws_val is not None else None
 
@@ -177,12 +193,14 @@ def _eval_cell(
             t_fml = wb_fml[target_sheet]
             t_val = wb_val[target_sheet] if (wb_val is not None and target_sheet in wb_val.sheetnames) else None
             col_idx = openpyxl.utils.column_index_from_string(col_letters)
-            resolved = _eval_cell(t_val, t_fml, wb_val, wb_fml, int(row_digits), col_idx)
+            resolved = _eval_cell(
+                t_val, t_fml, wb_val, wb_fml, int(row_digits), col_idx, _seen
+            )
             if resolved is not None and not (isinstance(resolved, str) and resolved in EXCEL_ERRORS):
                 return resolved
 
     if "SUMIF(" in upper_fml and ws_fml is not None and wb_fml is not None:
-        article = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, row, 4))
+        article = clean_text(_eval_cell(ws_val, ws_fml, wb_val, wb_fml, row, 4, _seen))
         if not article:
             return 0
         total_qty = 0.0
@@ -193,9 +211,9 @@ def _eval_cell(
             c_fml = wb_fml[sname]
             c_val = wb_val[sname] if (wb_val is not None and sname in wb_val.sheetnames) else None
             for r in range(3, min(c_fml.max_row + 1, 101)):
-                d_val = clean_text(_eval_cell(c_val, c_fml, wb_val, wb_fml, r, 4))
+                d_val = clean_text(_eval_cell(c_val, c_fml, wb_val, wb_fml, r, 4, _seen))
                 if d_val.lower() == article.lower():
-                    g_val = _eval_cell(c_val, c_fml, wb_val, wb_fml, r, 7)
+                    g_val = _eval_cell(c_val, c_fml, wb_val, wb_fml, r, 7, _seen)
                     if isinstance(g_val, (int, float)) and not isinstance(g_val, bool):
                         total_qty += float(g_val)
         return math.ceil(total_qty / 10.0) if total_qty > 0 else 0

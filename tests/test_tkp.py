@@ -12,9 +12,11 @@ from pyopenvba import ExcelFile
 from pyopenvba.apps.excel import ExcelApplication
 
 from generate_tkp import (
+    _eval_cell,
     build_preview_rows,
     clean_text,
     find_default_template,
+    format_qty,
     generate_tkp,
     read_tkp_data,
 )
@@ -267,6 +269,40 @@ class TKPTest(unittest.TestCase):
         """The error set must keep real Excel errors out of the document."""
         for error in ("#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NUM!"):
             self.assertEqual(clean_text(error), "")
+
+    def test_format_qty_is_always_plain_decimal(self):
+        """Quantities must never reach the document in scientific notation.
+
+        Regression (M1): %g renders 1234567.5 as "1.23457e+06" and truncates to
+        six significant digits.
+        """
+        self.assertEqual(format_qty(1), "1")
+        self.assertEqual(format_qty(50), "50")
+        self.assertEqual(format_qty(2.5), "2.5")
+        self.assertEqual(format_qty(0.3), "0.3")
+        self.assertEqual(format_qty(1234567.5), "1234567.5")
+        self.assertEqual(format_qty(10000000.5), "10000000.5")
+        for value in (2.5, 1 / 3, 1234567.5, 10000000.5, 0.1 + 0.2):
+            self.assertNotIn("e", format_qty(value).lower())
+
+    def test_circular_reference_resolves_to_empty(self):
+        """A reference cycle degrades to a blank value instead of crashing.
+
+        Regression (M3): _eval_cell() recursed without a guard, so two cells that
+        point at each other raised an unhandled RecursionError.
+        """
+        wb = openpyxl.Workbook()
+        wb.active.title = "Наценки-Скидки"
+        first = wb.create_sheet("X")
+        second = wb.create_sheet("Y")
+        first["C1"] = "=Y!C1"
+        second["C1"] = "=X!C1"
+        self.assertEqual(_eval_cell(first, first, wb, wb, 1, 3), "")
+
+        # A ordinary reference chain must still resolve.
+        first["C1"] = "=Наценки-Скидки!C2"
+        wb["Наценки-Скидки"]["C2"] = "Значение"
+        self.assertEqual(_eval_cell(first, first, wb, wb, 1, 3), "Значение")
 
     def test_python_build_from_dotx_template(self):
         with TemporaryDirectory() as tmp:
