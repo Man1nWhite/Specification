@@ -291,11 +291,11 @@ End Function
 Private Function ЗаголовокБлокаШкафа(ByVal cabNo As Long, ByVal blockNo As Long) As String
     Select Case blockNo
         Case 1
-            ЗаголовокБлокаШкафа = "Шкаф " & CStr(cabNo) & " ПТК"
+            ЗаголовокБлокаШкафа = "Оборудование ПТК (шкаф " & CStr(cabNo) & ")"
         Case 2
-            ЗаголовокБлокаШкафа = "Шкаф " & CStr(cabNo) & " телекоммуникационное оборудование"
+            ЗаголовокБлокаШкафа = "Телекоммуникационное оборудование для АСУ ТП (шкаф " & CStr(cabNo) & ")"
         Case 3
-            ЗаголовокБлокаШкафа = "Шкаф " & CStr(cabNo) & " шкафное оборудование"
+            ЗаголовокБлокаШкафа = "Шкафное оборудование ПТК (шкаф " & CStr(cabNo) & ")"
     End Select
 End Function
 

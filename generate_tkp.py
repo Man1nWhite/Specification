@@ -328,9 +328,9 @@ def read_tkp_data(excel_source: str | Path | Workbook) -> TKPData:
 
     # 2. Cabinets 1..17 — 3 blocks per cabinet sheet
     block_defs = (
-        (1, "ПТК"),
-        (2, "телекоммуникационное оборудование"),
-        (3, "шкафное оборудование"),
+        (1, "Оборудование ПТК"),
+        (2, "Телекоммуникационное оборудование для АСУ ТП"),
+        (3, "Шкафное оборудование ПТК"),
     )
     for cab_no in range(1, 18):
         cab_fml = _find_sheet(wb_fml, str(cab_no), f"Шкаф {cab_no}")
@@ -345,7 +345,7 @@ def read_tkp_data(excel_source: str | Path | Workbook) -> TKPData:
             )
             if cab_items:
                 sections.append(
-                    SpecSection(title=f"Шкаф {cab_no} {suffix}", items=cab_items)
+                    SpecSection(title=f"{suffix} (шкаф {cab_no})", items=cab_items)
                 )
 
     # 3. ЗИП — all positions with G > 0 from Spare parts

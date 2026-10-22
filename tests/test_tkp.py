@@ -1,5 +1,6 @@
 """Static packaging checks, headless VBA preview test, and Python generator tests."""
 
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -87,7 +88,6 @@ class TKPTest(unittest.TestCase):
 
     def test_default_template_is_only_the_dotx_asset(self):
         self.assertEqual(find_default_template(ROOT), TEMPLATE)
-
         with TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
             for name in (
@@ -98,6 +98,66 @@ class TKPTest(unittest.TestCase):
                 (base_dir / name).touch()
             with self.assertRaises(FileNotFoundError):
                 find_default_template(base_dir)
+
+    def test_template_has_no_latin_letters_inside_russian_words(self):
+        """A Latin "e" typed instead of "ё" is invisible to the spellchecker.
+
+        The template used to ship "Объeм", "выдаeтся", "приeмо-сдаточные",
+        "надeжность", "счeт" and "трeхуровневой" — every one of them reaches the
+        customer as a typo because Word does not flag a Latin letter inside a
+        Russian word. Only the certificate number "RU.AЖ49.H04589" mixes scripts.
+        """
+        cyrillic = re.compile(r"[Ѐ-ӿ]")
+        latin = re.compile(r"[A-Za-z]")
+        mixed = set()
+        for name in ("word/document.xml", "word/header1.xml", "word/header2.xml"):
+            with ZipFile(TEMPLATE) as archive:
+                root = etree.fromstring(archive.read(name))
+            text = " ".join(t.text or "" for t in root.iter(f"{{{W}}}t"))
+            for token in re.findall(r"[^\W\d_]+", text):
+                if cyrillic.search(token) and latin.search(token):
+                    mixed.add((name, token))
+        self.assertEqual(mixed, {("word/document.xml", "AЖ")})
+
+    def test_template_uses_the_proofread_wording(self):
+        """The wording follows the reference ТКП: «ё», «работ», «Акта», «тайму»."""
+        with ZipFile(TEMPLATE) as archive:
+            root = etree.fromstring(archive.read("word/document.xml"))
+        text = "".join(t.text or "" for t in root.iter(f"{{{W}}}t"))
+        for broken in (
+            "Оплата работы по пунктам",
+            "стоимости работы по этапу",
+            "Комплексного опробование",
+            "коммерческую тайну",
+            "третьих сторон и лиц",
+            "оформлением Акт о завершении",
+            "исходных данных, Спецификация",
+            "Приемо-сдаточные испытания",
+            "приема-передачи",
+            "приемки-передачи",
+            "3 (трех)",
+            "собственности Заказчику",
+        ):
+            self.assertNotIn(broken, text)
+        for fixed in (
+            "Оплата работ по пунктам 5–8",
+            "от стоимости работ по этапу",
+            "Комплексное опробование",
+            "коммерческую тайму",
+            "для третьих лиц",
+            "оформлением Акта о завершении ПНР",
+            "При изменении исходных данных Спецификация",
+            "Приёмо-сдаточные испытания",
+            "Акта приёма-передачи документации",
+            "Протокола приёма-передачи",
+            "3 (трёх)",
+            "Объём поставки",
+            "выдаётся сертификат",
+            "надёжность",
+            "за счёт трёхуровневой",
+            "собственности к Заказчику",
+        ):
+            self.assertIn(fixed, text)
 
     def test_preview_has_only_the_standard_specification_columns(self):
         # Read the sheet by name: "xl/worksheets/sheet26.xml" would silently point
@@ -143,10 +203,10 @@ class TKPTest(unittest.TestCase):
             [v[1] for v in group_rows],
             [
                 "Программное обеспечение",
-                "Шкаф 1 ПТК",
-                "Шкаф 1 телекоммуникационное оборудование",
-                "Шкаф 1 шкафное оборудование",
-                "Шкаф 2 шкафное оборудование",
+                "Оборудование ПТК (шкаф 1)",
+                "Телекоммуникационное оборудование для АСУ ТП (шкаф 1)",
+                "Шкафное оборудование ПТК (шкаф 1)",
+                "Шкафное оборудование ПТК (шкаф 2)",
                 "ЗИП",
             ],
         )
@@ -239,7 +299,7 @@ class TKPTest(unittest.TestCase):
         )
         self.assertEqual(vba_rows, py_rows)
         descriptions = [row[1] for row in py_rows]
-        self.assertIn("Шкаф 1 ПТК", descriptions)
+        self.assertIn("Оборудование ПТК (шкаф 1)", descriptions)
         self.assertIn("Модуль ввода", descriptions)
         self.assertIn("Обычная позиция", descriptions)
         self.assertNotIn("Итого по шкафу", descriptions)
