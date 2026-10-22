@@ -120,7 +120,7 @@ class TKPTest(unittest.TestCase):
         self.assertEqual(mixed, {("word/document.xml", "AЖ")})
 
     def test_template_uses_the_proofread_wording(self):
-        """The wording follows the reference ТКП: «ё», «работ», «Акта», «тайму»."""
+        """The wording follows the reference ТКП: «ё», «работ», «Акта», «тайну»."""
         with ZipFile(TEMPLATE) as archive:
             root = etree.fromstring(archive.read("word/document.xml"))
         text = "".join(t.text or "" for t in root.iter(f"{{{W}}}t"))
@@ -136,6 +136,21 @@ class TKPTest(unittest.TestCase):
             "приемки-передачи",
             "3 (трех)",
             "собственности Заказчику",
+            "третьим лицам или сторонам",
+            "Монтаж КИПиА",
+            "Монтаж и подключение кабельных линий",
+            "Для управления следующими системами",
+            "контроллеров шкафов диспетчеризации",
+            "Исполнительная документация",
+            "оперативного и инженеров",
+            "заземляющими элементами",
+            "распределенных",
+            "включена в состав средств измерения Госреестра",
+            "пуско-наладочных",
+            "ГОСТ Р ИСО 9001 – 2015",
+            "ГОСТ Р ИСО 45001 – 2020",
+            "~220В",
+            "производителей, номенклатура",
         ):
             self.assertNotIn(broken, text)
         for fixed in (
@@ -155,8 +170,84 @@ class TKPTest(unittest.TestCase):
             "за счёт трёхуровневой",
             "собственности к Заказчику",
             "по созданию АСУ ТП осуществляется на склад Заказчика по адресу:",
+            "Технико-коммерческое предложение",
+            "Перечень передаваемой документации",
+            "Абельный журнал",
+            "Исполнительные схемы",
+            "Акты скрытых работ",
+            "Документация на ППО",
+            "Эксплуатационная документация (руководство оператора, паспорта)",
+            "Настройка контроллеров ПТК",
+            "оперативного персонала и инженеров АСУ ТП",
+            "10 (десять) недель с момента окончания работ по этапу № 6",
+            "Монтаж оборудования",
+            "между заземлителями и заземляемыми элементами",
+            "в электроустановках напряжением до 1000 В",
+            "распределённых АСУ ТП",
+            "внесена в Госреестр средств измерений",
+            "пусконаладочных, интеграционных услуг",
+            "ГОСТ Р ИСО 9001-2015",
+            "ГОСТ Р ИСО 45001-2020",
+            "~220 В, =220 В, =24 В",
+            "третьим лицам без письменного разрешения",
         ):
             self.assertIn(fixed, text)
+
+    def test_template_uses_the_reviewed_content(self):
+        """Content changes from the document review: rows, order, terms, titles."""
+        with ZipFile(TEMPLATE) as archive:
+            document = etree.fromstring(archive.read("word/document.xml"))
+            header = etree.fromstring(archive.read("word/header1.xml"))
+        body = document.find(f"{{{W}}}body")
+        assert body is not None
+        tables = body.findall(f"{{{W}}}tbl")
+
+        def table_rows(index: int) -> list[list[str]]:
+            result = []
+            for tr in tables[index].findall(f"{{{W}}}tr"):
+                cells = tr.findall(f"{{{W}}}tc")
+                result.append(
+                    [
+                        " ".join("".join(p.itertext()) for p in tc.findall(f"{{{W}}}p")).strip()
+                        for tc in cells
+                    ]
+                )
+            return result
+
+        # Приложение 4 is now the list of documents handed over to the customer.
+        self.assertEqual(
+            [r[1] for r in table_rows(2)],
+            [
+                "Наименование",
+                "Протокол проверки наличия цепи между заземлителями и заземляемыми элементами",
+                "Протокол измерения сопротивления изоляции",
+                "Протокол проверки автоматических выключателей в электроустановках "
+                "напряжением до 1000 В. Оформляется на этапе выполнения монтажных работ",
+                "Абельный журнал",
+                "Исполнительные схемы",
+                "Акты скрытых работ",
+                "Документация на ППО",
+                "Эксплуатационная документация (руководство оператора, паспорта)",
+            ],
+        )
+        # Приложение 5 keeps only the cabinet mounting.
+        self.assertEqual(
+            [r[1] for r in table_rows(3)],
+            ["Наименование работ", "Монтаж шкафов на подготовленные основания"],
+        )
+        # Приложение 6: integration with the upper level comes before the
+        # comprehensive test.
+        works = [r[1] for r in table_rows(4)]
+        self.assertLess(
+            works.index("Интеграция с верхним уровнем"), works.index("Комплексное опробование")
+        )
+        self.assertIn("Настройка контроллеров ПТК", works)
+        # Приложение 4 is listed under the new name in the appendix list.
+        self.assertIn("Перечень передаваемой документации", [r[1] for r in table_rows(1)])
+        # The document is a technical and commercial proposal, in the title and
+        # in the running header.
+        self.assertIn("Технико-коммерческое предложение", "".join(body.itertext()))
+        self.assertIn("Технико-коммерческое предложение", "".join(header.itertext()))
 
     def test_preview_has_only_the_standard_specification_columns(self):
         # Read the sheet by name: "xl/worksheets/sheet26.xml" would silently point

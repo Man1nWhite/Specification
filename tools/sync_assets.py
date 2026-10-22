@@ -156,7 +156,11 @@ def _apply_title_and_header_bookmarks(
         )
 
     running_header = next(
-        (p for p in header.findall(".//w:p", NS) if "Коммерческое предложение" in word_text(p)),
+        (
+            p
+            for p in header.findall(".//w:p", NS)
+            if "Технико-коммерческое предложение" in word_text(p)
+        ),
         None,
     )
     if running_header is None:
@@ -168,7 +172,7 @@ def _apply_title_and_header_bookmarks(
     header_start, header_end = bookmark("HeaderNum", 1000)
     running_header.extend(
         (
-            run("Коммерческое предложение ", example),
+            run("Технико-коммерческое предложение ", example),
             header_start,
             run("№_/1 от ..2026", example),
             header_end,
