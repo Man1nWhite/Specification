@@ -224,6 +224,49 @@ class TKPTest(unittest.TestCase):
         for plain in ("приёма-передачи", "приёмо-сдаточные", "приёмо-сдаточных"):
             self.assertNotIn(plain, text)
 
+    def test_template_document_title_is_tkp(self):
+        """Word names a new document after the template's title property."""
+        with ZipFile(TEMPLATE) as archive:
+            core = etree.fromstring(archive.read("docProps/core.xml"))
+            app = etree.fromstring(archive.read("docProps/app.xml"))
+        title = core.find("{http://purl.org/dc/elements/1.1/}title")
+        self.assertIsNotNone(title)
+        self.assertEqual(title.text, "ТКП")
+        parts = app.find(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties}"
+            "TitlesOfParts"
+        )
+        assert parts is not None
+        first = parts.find(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes}vector"
+            "/{http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes}lpstr"
+        )
+        self.assertIsNotNone(first)
+        self.assertEqual(first.text, "ТКП")
+
+    def test_template_notes_who_lays_the_external_cables(self):
+        """Appendix 5 states that the customer wires the field cables."""
+        with ZipFile(TEMPLATE) as archive:
+            document = etree.fromstring(archive.read("word/document.xml"))
+        body = document.find(f"{{{W}}}body")
+        assert body is not None
+        children = list(body)
+        mounting = next(
+            child
+            for child in children
+            if child.tag == f"{{{W}}}tbl"
+            and "Монтаж шкафов на подготовленные основания"
+            in "".join(t.text or "" for t in child.iter(f"{{{W}}}t"))
+        )
+        note = children[children.index(mounting) + 1]
+        assert note.tag == f"{{{W}}}p"
+        text = "".join(t.text or "" for t in note.iter(f"{{{W}}}t"))
+        self.assertEqual(
+            text,
+            "Примечание: Прокладка и расключение внешних кабельных связей от "
+            "датчиков/механизмов до шкафов управления выполняются силами Заказчика.",
+        )
+
     def test_template_uses_the_reviewed_content(self):
         """Content changes from the document review: rows, order, terms, titles."""
         with ZipFile(TEMPLATE) as archive:
