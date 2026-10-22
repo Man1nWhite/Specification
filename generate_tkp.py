@@ -806,7 +806,7 @@ def generate_tkp(
     if template_path is None:
         template_path = find_default_template(ROOT)
     if output_path is None:
-        output_path = ROOT / "Технико-коммерческое предложение_результат.docx"
+        output_path = ROOT / "Технико-коммерческое предложение.docx"
 
     data = read_tkp_data(excel_source)
     if data.total_items == 0 and use_demo_if_empty:
@@ -864,7 +864,7 @@ def main() -> None:
         "-o",
         "--output",
         type=Path,
-        default=ROOT / "Технико-коммерческое предложение_результат.docx",
+        default=ROOT / "Технико-коммерческое предложение.docx",
         help="Путь для сохранения готового документа Word",
     )
     args = parser.parse_args()
