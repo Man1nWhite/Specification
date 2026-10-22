@@ -14,9 +14,11 @@ select = [
     "RUF", # ruff-specific rules
 ]
 ignore = [
-    # The project is Russian-language, so Cyrillic in strings and comments is
-    # expected: these two rules only flag Cyrillic letters that look like Latin.
+    # The project is Russian-language, so Cyrillic in strings, comments and
+    # docstrings is expected: these three rules only flag Cyrillic letters that
+    # look like Latin.
     "RUF001",
+    "RUF002",
     "RUF003",
 ]
 

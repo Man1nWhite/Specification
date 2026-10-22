@@ -24,11 +24,18 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 X_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+DC_NS = "http://purl.org/dc/elements/1.1/"
+EP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+VT_NS = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 W = f"{{{W_NS}}}"
 X = f"{{{X_NS}}}"
 NS = {"w": W_NS}
 
 PREVIEW_SHEET = "Спец_ТКП"
+
+# Word shows this property as the document name when a document is created from
+# the template. The visible title on the first page stays untouched.
+DOCUMENT_TITLE = "ТКП"
 
 
 def replace_zip_part(
@@ -156,7 +163,11 @@ def _apply_title_and_header_bookmarks(
         )
 
     running_header = next(
-        (p for p in header.findall(".//w:p", NS) if "Коммерческое предложение" in word_text(p)),
+        (
+            p
+            for p in header.findall(".//w:p", NS)
+            if "Технико-коммерческое предложение" in word_text(p)
+        ),
         None,
     )
     if running_header is None:
@@ -168,7 +179,7 @@ def _apply_title_and_header_bookmarks(
     header_start, header_end = bookmark("HeaderNum", 1000)
     running_header.extend(
         (
-            run("Коммерческое предложение ", example),
+            run("Технико-коммерческое предложение ", example),
             header_start,
             run("№_/1 от ..2026", example),
             header_end,
@@ -182,12 +193,37 @@ def _fix_notes_paragraph(notes: etree._Element) -> None:
             t_el.text = "П" + t_el.text
 
 
+def _set_document_title(parts: dict[str, bytes]) -> None:
+    """Give the template the «ТКП» title property.
+
+    Word uses this property as the document name when a document is created
+    from the template, so the new document is called «ТКП» while the visible
+    title on the first page keeps its own wording.
+    """
+    core = etree.fromstring(parts["docProps/core.xml"])
+    title = core.find(f"{{{DC_NS}}}title")
+    if title is None:
+        title = etree.SubElement(core, f"{{{DC_NS}}}title")
+    title.text = DOCUMENT_TITLE
+    parts["docProps/core.xml"] = write_xml(core)
+
+    app = etree.fromstring(parts["docProps/app.xml"])
+    vector = app.find(f"{{{EP_NS}}}TitlesOfParts/{{{VT_NS}}}vector")
+    if vector is not None:
+        first = vector.find(f"{{{VT_NS}}}lpstr")
+        if first is not None:
+            first.text = DOCUMENT_TITLE
+            parts["docProps/app.xml"] = write_xml(app)
+
+
 def patch_template() -> None:
     """Update the single ТКП_шаблон.dotx file in place."""
     with ZipFile(TEMPLATE_DOTX) as archive:
         document = etree.fromstring(archive.read("word/document.xml"))
         header = etree.fromstring(archive.read("word/header1.xml"))
         settings = etree.fromstring(archive.read("word/settings.xml"))
+        core = archive.read("docProps/core.xml")
+        app = archive.read("docProps/app.xml")
 
     for attached in settings.findall(W + "attachedTemplate"):
         settings.remove(attached)
@@ -221,13 +257,18 @@ def patch_template() -> None:
     add_empty_bookmark(spec_p, "Spec_Table", 26)
     body.insert(body.index(notes), spec_p)
 
+    parts = {
+        "word/document.xml": write_xml(document),
+        "word/header1.xml": write_xml(header),
+        "word/settings.xml": write_xml(settings),
+        "docProps/core.xml": core,
+        "docProps/app.xml": app,
+    }
+    _set_document_title(parts)
+
     replace_zip_part(
         TEMPLATE_DOTX,
-        {
-            "word/document.xml": write_xml(document),
-            "word/header1.xml": write_xml(header),
-            "word/settings.xml": write_xml(settings),
-        },
+        parts,
         remove_members={"word/_rels/settings.xml.rels"},
     )
 
