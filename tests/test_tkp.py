@@ -416,10 +416,12 @@ class TKPTest(unittest.TestCase):
     def test_template_names_the_basis_of_the_offer(self):
         """Page 2 says what the offer rests on.
 
-        The block is one sentence and one line: the review cut the four-bullet
-        list down to the document the offer is based on, because the lines about
-        the two re-estimate triggers only repeated what the parameters table and
-        Appendix 8 already say.
+        The block is one sentence: the review cut the four-bullet list down to
+        the document the offer is based on, because the lines about the two
+        re-estimate triggers only repeated what the parameters table and
+        Appendix 8 already say. The document itself stays inside that sentence —
+        on a line of its own it read as a form to fill in rather than as the
+        basis of the offer.
         """
         texts = self.page_two_texts()
         self.assertIn("Исходные данные и допущения:", texts)
@@ -428,11 +430,19 @@ class TKPTest(unittest.TestCase):
         parameters = texts.index("Параметры предложения")
         self.assertLess(parameters, basis)
         self.assertLess(basis, exclusions)
-        self.assertEqual(
-            texts[basis + 1], "Предложение подготовлено на основании следующих исходных данных:"
+        sentence = texts[basis + 1]
+        self.assertTrue(
+            sentence.startswith(
+                "Предложение подготовлено на основании следующих исходных данных:"
+            ),
+            sentence,
         )
-        self.assertTrue(texts[basis + 2].startswith("документ-основание:"), texts[basis + 2])
-        self.assertIn("ревизия ____;", texts[basis + 2])
+        self.assertIn("документ-основание — ____________ (наименование)", sentence)
+        self.assertIn("№ ____ от __.__.____, ревизия ____;", sentence)
+        # No second line and no double colon: the blank follows the same sentence.
+        self.assertNotIn("данных:документ", sentence)
+        self.assertNotIn(":", sentence[sentence.index(":") + 1 :])
+        self.assertEqual(texts[basis + 2], "Условия оплаты:")
         # The wording the review rejected: too general to hold anybody to it.
         self.assertNotIn("могут быть уточнены", " ".join(texts[basis:exclusions]))
 
@@ -774,8 +784,13 @@ class TKPTest(unittest.TestCase):
         ]
         self.assertEqual(len(charts), 1)
         chart = charts[0]
-        # Nothing stands between the table of stages and its chart.
-        self.assertEqual(body.index(plan) + 1, body.index(chart))
+        # A section break stands between the table of stages and its chart: the
+        # chart needs the full 14574-twip grid, which does not fit a portrait
+        # page, so it gets a landscape page of its own. Nothing else stands there.
+        self.assertEqual(body.index(plan) + 2, body.index(chart))
+        opening = body[body.index(plan) + 1]
+        self.assertEqual(opening.tag, f"{{{W}}}p")
+        self.assertFalse(element_text(opening).strip())
         for gone in ("Диаграмма Ганта:", "Полосы показывают недели выполнения этапов"):
             self.assertNotIn(
                 gone,
@@ -832,6 +847,63 @@ class TKPTest(unittest.TestCase):
         total = stage_rows[-1].findall(f"{{{W}}}tc")
         self.assertEqual(
             total[1].find(f"{{{W}}}tcPr/{{{W}}}gridSpan").get(f"{{{W}}}val"), "35"
+        )
+
+    def test_gantt_chart_is_alone_on_a_landscape_page(self):
+        """The chart is the only thing on a page with the sheet turned.
+
+        The grid is wider than the portrait text area by design, so the appendix
+        hands the chart a section of its own: a break before the chart and one
+        after it, and the rest of the document stays portrait.
+        """
+        body = template_body()
+        plan = find_table(
+            body, "20 (двадцать) недель с даты поступления авансового платежа"
+        )
+        chart = next(
+            table for table in body.findall(f"{{{W}}}tbl") if rows_of(table)[0][0] == "Этап"
+        )
+        opening = body[body.index(plan) + 1]
+        closing = body[body.index(chart) + 1]
+
+        def section_of(paragraph) -> etree._Element:
+            found = paragraph.find(f"{{{W}}}pPr/{{{W}}}sectPr")
+            self.assertIsNotNone(found, element_text(paragraph) or "no section break")
+            return found
+
+        def orientation(sectPr) -> tuple[str, bool]:
+            page = sectPr.find(f"{{{W}}}pgSz")
+            return page.get(f"{{{W}}}w"), page.get(f"{{{W}}}orient") == "landscape"
+
+        # The break before the chart closes the portrait page of the appendix.
+        self.assertFalse(orientation(section_of(opening))[1])
+        # The break after the chart closes the landscape page it sits on.
+        self.assertTrue(orientation(section_of(closing))[1])
+        # The chart is the whole of that section: nothing but the break follows
+        # it, and nothing but the break precedes it.
+        self.assertEqual(body.index(chart), body.index(opening) + 1)
+        self.assertEqual(body.index(closing), body.index(chart) + 1)
+        # Landscape A4 with the margins of the document holds the full grid.
+        page = section_of(closing).find(f"{{{W}}}pgSz")
+        margins = section_of(closing).find(f"{{{W}}}pgMar")
+        text_area = int(page.get(f"{{{W}}}w")) - int(
+            margins.get(f"{{{W}}}left")
+        ) - int(margins.get(f"{{{W}}}right"))
+        self.assertEqual(int(page.get(f"{{{W}}}h")), 11906)
+        self.assertGreaterEqual(text_area, 4949 + 35 * 275)
+        # The chart does not turn the rest of the document with it: the next
+        # section break is a portrait page again (Appendix 9), and so is the
+        # last section (the list of terms).
+        elements = list(body)
+        following = [
+            element.find(f"{{{W}}}pPr/{{{W}}}sectPr")
+            for element in elements[elements.index(closing) + 1 :]
+            if element.tag == f"{{{W}}}p"
+        ]
+        nxt = next(sectPr for sectPr in following if sectPr is not None)
+        self.assertFalse(orientation(nxt)[1])
+        self.assertFalse(
+            orientation(body.find(f"{{{W}}}sectPr"))[1], "the last section is portrait"
         )
 
     def test_template_numbers_the_reference_pages_as_appendices(self):

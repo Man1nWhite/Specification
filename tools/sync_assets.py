@@ -70,16 +70,20 @@ NUMBER_PLACEHOLDER = "№ __/1 от __.__.2026"
 
 # Page two opens with what the offer rests on. The general note that the price
 # «may be refined» gave the customer nothing to hold on to, so it names the
-# source document. The wording is deliberately one sentence on two lines: the
+# source document. The wording is deliberately one sentence on one line: the
 # review asked for short blocks where every sentence carries weight, so the
-# four-bullet list of the previous revision is gone. The constants below are the
-# source of truth, and the sync step rewrites this paragraph to them.
+# four-bullet list of the previous revision is gone, and the document it rests on
+# stays inside the same sentence instead of starting a line of its own. The
+# constants below are the source of truth, and the sync step rewrites this
+# paragraph to them; the empty item list also folds a template that still keeps
+# the document on a separate line back into one paragraph.
 BASIS_HEADING = "Исходные данные и допущения:"
-BASIS_INTRO = "Предложение подготовлено на основании следующих исходных данных:"
-BASIS_ITEMS = (
-    "документ-основание: ____________ (наименование), № ____ от __.__.____, "
-    "ревизия ____;",
+BASIS_INTRO = (
+    "Предложение подготовлено на основании следующих исходных данных: "
+    "документ-основание — ____________ (наименование), № ____ от __.__.____, "
+    "ревизия ____;"
 )
+BASIS_ITEMS: tuple[str, ...] = ()
 LEGACY_NOTE_HEADING = "Примечание:"
 
 # Then the scope boundary: what the offer does not cover. The introduction that
@@ -347,11 +351,13 @@ TERMS_COLUMN_PCT = ("1111", "3889")
 # colours: a dark red head, light grey group rows, blue accents and grey grid
 # lines.
 #
-# Widths are the whole page, not the text area. The block has been laid out this
-# way since the review of the template: a table wider than the margins by
-# design, so the 35 week columns are wide enough to stay legible at 8 pt. The
-# chart used to carry a 12-twip spare column at the right edge, which was a
-# layout accident rather than a decision, so it is gone.
+# Widths are the whole page, not the text area: the 35 week columns are only
+# legible at 8 pt, so the grid takes all the room a sheet gives it. On the
+# portrait page that would be 14574 twips against a 9780-twip text area, which is
+# why the chart stands on a page of its own with the sheet turned — landscape
+# keeps the same margins and leaves 14712 twips. The chart used to carry a
+# 12-twip spare column at the right edge, which was a layout accident rather than
+# a decision, so it is gone.
 BAR_FILL = "0640A5"
 HEAD_FILL = "C00000"
 GRID_LINE = "BFBFBF"
@@ -361,6 +367,10 @@ GANTT_TABLE_TWIPS = GANTT_LABEL_TWIPS + GANTT_WEEK_TWIPS * GANTT_WEEKS
 # Two digits have to fit into one week column, so the scale is set smaller than
 # the body text; the stage names stay at the 12 pt house size.
 GANTT_SCALE_SIZE = "16"
+# The section break that puts the chart on a landscape page of its own. The chart
+# is the only content of that section, and the appendix continues on a portrait
+# page after it, so the document keeps two breaks and three sections.
+GANTT_SECTION_TYPE = "nextPage"
 
 
 def replace_zip_part(
@@ -1442,45 +1452,137 @@ def is_blank_paragraph(element: etree._Element) -> bool:
 
 
 def blank_paragraph_example(body: etree._Element) -> etree._Element | None:
-    """A spacer paragraph to clone, so the new one carries the same spacing."""
+    """A spacer paragraph to clone, so the new one carries the same spacing.
+
+    A paragraph that carries section properties is not a spacer: cloning it would
+    copy a section break into the middle of the text.
+    """
     for paragraph in body.findall(W + "p"):
-        if is_blank_paragraph(paragraph):
+        if is_blank_paragraph(paragraph) and paragraph.find(W + "pPr/" + W + "sectPr") is None:
             return paragraph
     return None
 
 
+SECTPR_ORDER = (
+    "headerReference", "footerReference", "footnotePr", "endnotePr", "type",
+    "pgSz", "pgMar", "paperSrc", "pgBorders", "lnNumType", "pgNumType", "cols",
+    "formProt", "vAlign", "noEndnote", "titlePg", "textDirection", "bidi",
+    "rtlGutter", "docGrid", "printerSettings", "sectPrChange",
+)
+
+
+def is_landscape(sectPr: etree._Element) -> bool:
+    """Whether the section is printed with the sheet turned."""
+    page = sectPr.find(W + "pgSz")
+    if page is None:
+        return False
+    if page.get(W + "orient") == "landscape":
+        return True
+    return int(page.get(W + "w")) > int(page.get(W + "h"))
+
+
+def set_page_orientation(sectPr: etree._Element, *, landscape: bool) -> None:
+    """Turn the section, keeping its paper size, margins and everything else."""
+    page = sectPr.find(W + "pgSz")
+    if page is None:
+        page = etree.Element(W + "pgSz")
+        _insert_in_order(sectPr, page, SECTPR_ORDER)
+    width = int(page.get(W + "w"))
+    height = int(page.get(W + "h"))
+    if landscape != (width > height):
+        page.set(W + "w", str(height))
+        page.set(W + "h", str(width))
+    if landscape:
+        page.set(W + "orient", "landscape")
+    else:
+        page.attrib.pop(W + "orient", None)
+
+
+def set_section_type(sectPr: etree._Element, value: str) -> None:
+    """Say how the section starts: a new page, a new odd page, or no break."""
+    for old in sectPr.findall(W + "type"):
+        sectPr.remove(old)
+    node = etree.Element(W + "type")
+    node.set(W + "val", value)
+    _insert_in_order(sectPr, node, SECTPR_ORDER)
+
+
+def _insert_in_order(parent: etree._Element, child: etree._Element, order: tuple[str, ...]) -> None:
+    """Put `child` before the first sibling the schema wants after it."""
+    rank = order.index(etree.QName(child).localname)
+    for index, sibling in enumerate(parent):
+        name = etree.QName(sibling).localname
+        if name in order and order.index(name) > rank:
+            parent.insert(index, child)
+            return
+    parent.append(child)
+
+
+def section_break_paragraph(body: etree._Element, *, landscape: bool) -> etree._Element:
+    """An empty paragraph that closes a section of the requested orientation.
+
+    Word stores the properties of a section on the last paragraph of that
+    section (and the last section of the document in `w:body`), so a break is a
+    paragraph mark carrying `w:sectPr`, not an element of its own.
+    """
+    source = body.find(W + "sectPr")
+    if source is None:
+        raise ValueError("The template has no section properties")
+    example = blank_paragraph_example(body)
+    paragraph = etree.Element(W + "p") if example is None else drop_para_ids(deepcopy(example))
+    properties = paragraph.find(W + "pPr")
+    if properties is None:
+        properties = etree.Element(W + "pPr")
+        paragraph.insert(0, properties)
+    for old in properties.findall(W + "sectPr"):
+        properties.remove(old)
+    sectPr = deepcopy(source)
+    set_page_orientation(sectPr, landscape=landscape)
+    set_section_type(sectPr, GANTT_SECTION_TYPE)
+    properties.append(sectPr)
+    return paragraph
+
+
 def add_gantt(body: etree._Element) -> None:
-    """Appendix 8: the same plan as a bar chart, right under the stages.
+    """Appendix 8: the same plan as a bar chart, on a landscape page of its own.
 
     The chart is generated data — one cell per week, no prose — so this step owns
-    both the chart and the spacers around it: the chart in place is rebuilt from
-    the constants, which also repairs the layout of an earlier revision (a spare
-    column at the right edge, a total row merged one column too wide). A template
-    of an earlier revision may still carry the heading and the caption of that
-    revision; both go.
+    both the chart and the section breaks around it: the chart in place is
+    rebuilt from the constants, which also repairs the layout of an earlier
+    revision (a spare column at the right edge, a total row merged one column too
+    wide). A template of an earlier revision may still carry the heading and the
+    caption of that revision; both go.
+
+    The grid is 14574 twips wide against a 9780-twip portrait text area, so the
+    chart is fenced off by a section break before it and another one after it:
+    the appendix keeps its portrait page up to the table of stages, the chart
+    gets a landscape page, and Appendix 9 starts on a portrait page again.
     """
     plan = find_table(body, GANTT_ANCHOR)
-    for table in [table for table in body.findall(W + "tbl") if is_gantt_table(table)]:
-        body.remove(table)
 
+    # Everything between the table of stages and the next block of the document
+    # belongs to the chart: the chart itself, the breaks around it, the spacers.
+    # All of it is rebuilt below.
     position = body.index(plan) + 1
-    while position < len(body) and is_blank_paragraph(body[position]):
-        body.remove(body[position])
-    body.insert(position, gantt_table())
+    while position < len(body):
+        element = body[position]
+        kind = etree.QName(element).localname
+        if kind == "tbl" and is_gantt_table(element):
+            body.remove(element)
+            continue
+        if kind == "p" and (
+            element.find(W + "pPr/" + W + "sectPr") is not None
+            or is_blank_paragraph(element)
+        ):
+            body.remove(element)
+            continue
+        break
 
-    # One spacer after the chart, the way the other appendices are separated.
-    after = position + 1
-    spacers = 0
-    while after < len(body) and is_blank_paragraph(body[after]):
-        if spacers:
-            body.remove(body[after])
-        else:
-            spacers += 1
-            after += 1
-    if not spacers:
-        example = blank_paragraph_example(body)
-        if example is not None:
-            body.insert(after, drop_para_ids(deepcopy(example)))
+    body.insert(position, section_break_paragraph(body, landscape=False))
+    position += 1
+    body.insert(position, gantt_table())
+    position += 1
+    body.insert(position, section_break_paragraph(body, landscape=True))
 
     stale = {LEGACY_GANTT_HEADING, LEGACY_GANTT_CAPTION}
     for paragraph in body.findall(W + "p"):
