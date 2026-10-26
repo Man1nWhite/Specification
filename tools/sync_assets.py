@@ -1,8 +1,11 @@
 """Synchronize Module1.bas, the single .dotx template, and the Excel preview sheet.
 
 For the template this step owns the bookmarks, the reviewed content blocks
-(assumptions, the ГОСТ 34 document set, the mounting scope, the terms page), the
-number in the running head and the 12 pt text policy.
+(assumptions, the list of exclusions, the handover documents, the mounting scope,
+the Gantt chart, the terms page), the number in the running head and the 12 pt
+text policy. The reviewed edition of the template is the source of truth: where
+the review cut a block, the step removes it instead of putting it back, and a
+second run leaves the file byte for byte identical.
 
 Run from the repository root with Python 3.10+ after installing requirements-dev.txt.
 Excel and Word are not required for this packaging step.
@@ -51,6 +54,13 @@ DOCUMENT_TITLE = "ТКП"
 HOUSE_SIZE = "24"
 RETIRED_SIZES = frozenset({"20", "22"})
 
+# One table is deliberately set at 11 pt: the stages of the calendar plan in
+# Appendix 8. Four columns of names and terms wrap badly at 12 pt, and the table
+# is a schedule rather than prose, so the smaller size stays. It is the only
+# exception to the house size, and `apply_font_policy` skips exactly this table.
+CALENDAR_PLAN_ANCHOR = "Плановая дата выполнения"
+CALENDAR_PLAN_SIZE = "22"
+
 # ---------------------------------------------------------------------------
 # Reviewed content
 # ---------------------------------------------------------------------------
@@ -60,24 +70,23 @@ NUMBER_PLACEHOLDER = "№ __/1 от __.__.2026"
 
 # Page two opens with what the offer rests on. The general note that the price
 # «may be refined» gave the customer nothing to hold on to, so it names the
-# source document and the two events that trigger a re-estimate.
+# source document. The wording is deliberately one sentence on two lines: the
+# review asked for short blocks where every sentence carries weight, so the
+# four-bullet list of the previous revision is gone. The constants below are the
+# source of truth, and the sync step rewrites this paragraph to them.
 BASIS_HEADING = "Исходные данные и допущения:"
 BASIS_INTRO = "Предложение подготовлено на основании следующих исходных данных:"
 BASIS_ITEMS = (
     "документ-основание: ____________ (наименование), № ____ от __.__.____, "
     "ревизия ____;",
-    "перечень сигналов АСУ ТП (Приложение 1) и структура ПТК (Приложение 2);",
-    "стоимость и сроки пересчитываются, если количество сигналов изменится более "
-    "чем на 10% относительно Приложения 1;",
-    "стоимость и сроки пересчитываются, если дата начала работ сдвинется более чем "
-    "на 3 месяца относительно согласованного календарного плана (Приложение 8).",
 )
 LEGACY_NOTE_HEADING = "Примечание:"
 
-# Then the scope boundary: the same list the review asked for, phrased as what
-# the offer does not cover.
+# Then the scope boundary: what the offer does not cover. The introduction that
+# used to open the list («В объём и стоимость настоящего предложения не
+# входят:») repeated the heading, so the bullets follow it directly.
 EXCLUSIONS_HEADING = "Не входит в объём предложения:"
-EXCLUSIONS_INTRO = "В объём и стоимость настоящего предложения не входят:"
+EXCLUSIONS_INTRO = ""
 EXCLUSIONS_ITEMS = (
     "поставка, монтаж и подключение датчиков, измерительных преобразователей и "
     "исполнительных механизмов;",
@@ -90,8 +99,6 @@ EXCLUSIONS_ITEMS = (
     "разрабатывает РКД в части ПТК АСУ ТП;",
     "метрологическая аттестация измерительных каналов и поверка средств измерений;",
     "экспертиза промышленной безопасности документации и технических устройств;",
-    "ЗИП сверх объёма Спецификации оборудования и его восполнение в период "
-    "эксплуатации;",
     "мероприятия по категорированию объекта КИИ и выполнению требований ФСТЭК "
     "России, включая аттестацию по требованиям информационной безопасности;",
     "согласование документации и получение разрешений в надзорных органах.",
@@ -99,20 +106,12 @@ EXCLUSIONS_ITEMS = (
 # The first revision of this template called the block «Допущения».
 LEGACY_EXCLUSIONS_HEADING = "Допущения:"
 
-# And what the customer owes for the plan to hold.
-DUTIES_HEADING = "Обязательства Заказчика:"
-DUTIES_INTRO = "Заказчик обеспечивает:"
-DUTIES_ITEMS = (
-    "готовность площадки к началу монтажных работ: основания под шкафы, "
-    "электропитание, контур заземления, климатические условия (подробный перечень "
-    "— в разделе «Монтажные работы»);",
-    "согласование РКД в течение 10 (десяти) рабочих дней с даты её передачи;",
-    "доступ персонала Исполнителя на объект и оформление пропусков;",
-    "технологическую среду для пусконаладочных работ: работоспособное "
-    "технологическое оборудование, доступ к нему и к сетям передачи данных;",
-    "ответственного представителя по верхнему уровню (АРМ, серверы, сеть и "
-    "общезаводское программное обеспечение).",
-)
+# A «Обязательства Заказчика» section stood between the exclusions and the
+# warranty. It repeated what Appendix 5 already requires from the customer in
+# detail, so it was cut: site readiness is stated once, next to the mounting
+# scope. A template of the previous revision still carries the block, and the
+# sync step removes it rather than leaving a duplicate behind.
+LEGACY_DUTIES_HEADING = "Обязательства Заказчика:"
 
 # The parameters table lists the stages but never said how long the whole
 # project takes; the critical path of Appendix 8 adds up to 35 weeks.
@@ -120,18 +119,18 @@ DURATION_ANCHOR = "ИТОГО без НДС"
 DURATION_LABEL = "Общий срок реализации проекта"
 DURATION_VALUE = "35 недель"
 
-# Payment terms: the moment of the second payment for the equipment, when title
-# passes, seven days instead of three for the stage advance, and the invoice
-# that follows the signed act.
+# Payment terms: the moment of the second payment for the equipment, seven days
+# instead of three for the stage advance, and the invoice that follows the signed
+# act. The review cut the sentence about the moment title passes to the customer:
+# the conditions of payment name the signed УПД once, and the guarantee runs from
+# the same document, so the paragraph stops there.
 PAYMENT_EQUIPMENT_ANCHOR = "Оплата аванса в размере 50% от стоимости оборудования"
 PAYMENT_EQUIPMENT = (
     "Оплата аванса в размере 50% от стоимости оборудования согласно пунктам 1–4 в "
-    "течение 7 (семи) календарных дней с даты подписания Сторонами Договора, "
-    "оставшиеся 50% — в течение 7 (семи) календарных дней с даты подписания "
-    "Сторонами универсального передаточного документа (УПД), который оформляется "
-    "после уведомления о готовности к отгрузке со склада и проведения заводских "
-    "испытаний. Право собственности на оборудование переходит к Заказчику с даты "
-    "подписания УПД."
+    "течение 7 (семи) календарных дней с даты подписания Сторонами Договора, 50% "
+    "от стоимости в течение 7 (семи) календарных дней с даты подписания Сторонами "
+    "универсального передаточного документа (УПД), оформляемого при передаче "
+    "оборудования на складе Заказчика."
 )
 PAYMENT_WORKS_ANCHOR = "Оплата работ по пунктам 5–8"
 PAYMENT_WORKS = (
@@ -187,32 +186,33 @@ MOUNTING_EXTRA_WORKS = (
     "Сборка кроссов",
     "Маркировка кабелей",
 )
-SITE_READINESS_HEADING = "Требования к готовности площадки:"
+# Appendix 5 states the site readiness requirements once, without a heading of
+# their own: the sentence above the list introduces them, the way the paragraphs
+# around it introduce their own lists. The list is what the customer has to
+# prepare before mounting, in the order the works need it.
 SITE_READINESS_INTRO = "К началу монтажных работ Заказчик обеспечивает:"
 SITE_READINESS = (
-    "Помещение: закрытое, отапливаемое, с завершёнными строительными и отделочными "
-    "работами, очищенное от пыли и строительного мусора; дверные проёмы и проходы "
-    "обеспечивают занос шкафов.",
-    "Температура и влажность: от +18 до +25 °C, относительная влажность не более "
-    "80 % при +25 °C, без конденсата.",
-    "Основания и фальшпол: выполненные основания (цоколи) под шкафы по чертежам "
+    "основания и фальшпол: выполненные основания (цоколи) под шкафы по чертежам "
     "общего вида, фальшпол с необходимой несущей способностью и кабельными каналами, "
     "разметка мест установки.",
-    "Контур заземления: смонтированный контур защитного и рабочего (информационного) "
+    "контур заземления: смонтированный контур защитного и рабочего (информационного) "
     "заземления с сопротивлением не более 4 Ом, главная заземляющая шина в помещении.",
-    "Электропитание: подведённые сети ~220 В (1ф) и ~380 В (3ф) частотой 50 Гц с "
-    "запасом по мощности не менее 5 кВт на шкаф, отдельные аппараты защиты, при "
-    "необходимости — питание от ИБП.",
-    "Освещение: рабочее и аварийное освещение не менее 300 лк в зоне монтажа, "
+    "электропитание: подведённые сети ~220 В (1ф) и ~380 В (3ф) частотой 50 Гц с "
+    "запасом по мощности не менее 5 кВт на шкаф, отдельные аппараты защиты.",
+    "освещение: рабочее и аварийное освещение не менее 300 лк в зоне монтажа, "
     "розетки ~220 В для подключения инструмента.",
-    "Пропускной режим: оформленные пропуска для персонала и транспорта, допуск к "
+    "пропускной режим: оформленные пропуска для персонала и транспорта, допуск к "
     "работам, согласование огневых и высотных работ, вводный инструктаж по охране труда.",
-    "Бытовки: помещения для хранения инструмента и спецодежды, места для отдыха и "
+    "бытовки: помещения для хранения инструмента и спецодежды, места для отдыха и "
     "приёма пищи, доступ к санитарно-бытовым помещениям.",
-    "Места складирования: крытая запираемая площадка для разгрузки и временного "
+    "места складирования: крытая запираемая площадка для разгрузки и временного "
     "хранения оборудования с подъездными путями и возможностью применения "
     "грузоподъёмной техники.",
 )
+# A heading and a nine-item list opened this block in the previous revision. Both
+# are gone — the sentence above the list does that job — so a template of that
+# revision is brought forward by removing the heading and its duplicates.
+LEGACY_SITE_READINESS_HEADING = "Требования к готовности площадки:"
 MOUNTING_NOTE_ANCHOR = "Примечание: Прокладка и расключение внешних кабельных связей"
 MOUNTING_NOTE = (
     "Примечание: Прокладка и расключение внешних кабельных связей от "
@@ -225,7 +225,11 @@ MOUNTING_NOTE = (
 
 DOCUMENTS_ANCHOR = "Кабельный журнал"
 DOCUMENTS_STAGE_NOTE = "Оформляется на этапе выполнения монтажных работ"
-RKD_GROUP_TITLE = "РКД и ЭД по ГОСТ 34"
+# Appendix 4 lists the documents themselves, 1..22. A shaded group row that
+# titled the set «РКД и ЭД по ГОСТ 34» stood above them in the previous
+# revision; the review dropped it, because a title line in the table says the
+# same as the heading of the appendix and pushes the list down a row.
+LEGACY_GROUP_ROW = "РКД и ЭД по ГОСТ 34"
 RKD_DOCUMENTS = (
     "Схема структурная комплекса технических средств автоматизации",
     "Схемы соединений внешних проводок и таблицы соединений внешних проводок",
@@ -287,8 +291,13 @@ TERMS = (
 # The bars follow the critical path: 20 weeks of equipment, a week of factory
 # tests, a week of delivery, three weeks of mounting and ten weeks of
 # commissioning — 35 weeks in total.
-GANTT_HEADING = "Диаграмма Ганта:"
-GANTT_CAPTION = (
+#
+# The chart goes straight under the table of stages, without a heading and a
+# caption: the whole appendix is the calendar plan, so «Диаграмма Ганта:» above
+# the bars told the reader nothing new. A template of the previous revision
+# carries both paragraphs, and the sync step removes them.
+LEGACY_GANTT_HEADING = "Диаграмма Ганта:"
+LEGACY_GANTT_CAPTION = (
     "Полосы показывают недели выполнения этапов; отсчёт недель — с даты "
     "заключения Договора."
 )
@@ -336,13 +345,19 @@ TERMS_COLUMN_PCT = ("1111", "3889")
 
 # Geometry and colours of the Gantt chart. The tables of the document keep their
 # colours: a dark red head, light grey group rows, blue accents and grey grid
-# lines. The chart is as wide as the calendar-plan table above it.
+# lines.
+#
+# Widths are the whole page, not the text area. The block has been laid out this
+# way since the review of the template: a table wider than the margins by
+# design, so the 35 week columns are wide enough to stay legible at 8 pt. The
+# chart used to carry a 12-twip spare column at the right edge, which was a
+# layout accident rather than a decision, so it is gone.
 BAR_FILL = "0640A5"
 HEAD_FILL = "C00000"
 GRID_LINE = "BFBFBF"
-GANTT_TABLE_TWIPS = 10065
-GANTT_LABEL_TWIPS = 3415
-GANTT_WEEK_TWIPS = (GANTT_TABLE_TWIPS - GANTT_LABEL_TWIPS) // GANTT_WEEKS
+GANTT_LABEL_TWIPS = 4949
+GANTT_WEEK_TWIPS = 275
+GANTT_TABLE_TWIPS = GANTT_LABEL_TWIPS + GANTT_WEEK_TWIPS * GANTT_WEEKS
 # Two digits have to fit into one week column, so the scale is set smaller than
 # the body text; the stage names stay at the 12 pt house size.
 GANTT_SCALE_SIZE = "16"
@@ -399,17 +414,73 @@ def run(text: str, example: etree._Element | None = None) -> etree._Element:
 
 
 def remove_bookmark(root: etree._Element, name: str) -> None:
+    """Remove the bookmark `name` together with the end that closes it.
+
+    An earlier revision of the template reused bookmark ids: the «Spec_Table»
+    bookmark shared its id with a `_Toc` entry, so removing every end with that
+    id tore the ends off the other bookmarks as well. The start is paired with
+    its own end by their order in the part, which keeps the rest untouched.
+    """
     starts = root.xpath(".//w:bookmarkStart[@w:name=$name]", namespaces=NS, name=name)
     if len(starts) != 1:
         raise ValueError(f"Expected one bookmark {name!r}, found {len(starts)}")
     start = starts[0]
     bm_id = start.get(W + "id")
+    same_id_starts = root.xpath(
+        ".//w:bookmarkStart[@w:id=$id]", namespaces=NS, id=bm_id
+    )
     ends = root.xpath(".//w:bookmarkEnd[@w:id=$id]", namespaces=NS, id=bm_id)
-    for end in ends:
+    position = same_id_starts.index(start)
+    if ends:
+        end = ends[position] if position < len(ends) else ends[-1]
         if end.getparent() is not None:
             end.getparent().remove(end)
     if start.getparent() is not None:
         start.getparent().remove(start)
+
+
+def xml_root(element: etree._Element) -> etree._Element:
+    """The root of the part `element` belongs to."""
+    node = element
+    while node.getparent() is not None:
+        node = node.getparent()
+    return node
+
+
+def free_bookmark_id(root: etree._Element) -> int:
+    """An id no bookmark of `root` uses yet.
+
+    The ids are hard-coded numbers in older revisions of this step, and the
+    document already uses some of them for its own `_Hlk` and `_Toc` bookmarks:
+    the same id twice makes Word repair the file, so every created bookmark asks
+    for a free one first.
+    """
+    used = set()
+    for tag in ("bookmarkStart", "bookmarkEnd"):
+        for element in root.iter(W + tag):
+            try:
+                used.add(int(element.get(W + "id")))
+            except (TypeError, ValueError):
+                continue
+    return max(used, default=0) + 1
+
+
+def drop_unpaired_bookmarks(root: etree._Element) -> int:
+    """Remove bookmark starts that no end closes.
+
+    The template of the previous revision reused bookmark ids, so removing one
+    bookmark could take the end of another with it. A start without its end is
+    an invalid part, which Word offers to repair: the start goes instead.
+    """
+    ends = {end.get(W + "id") for end in root.iter(W + "bookmarkEnd")}
+    dropped = 0
+    for start in list(root.iter(W + "bookmarkStart")):
+        if start.get(W + "id") in ends:
+            continue
+        if start.getparent() is not None:
+            start.getparent().remove(start)
+        dropped += 1
+    return dropped
 
 
 def add_empty_bookmark(paragraph: etree._Element, name: str, number: int) -> None:
@@ -542,12 +613,18 @@ def block_intro(heading: etree._Element) -> etree._Element | None:
 
 
 def block_items(heading: etree._Element) -> list[etree._Element]:
-    """The bullets of a «heading, introduction, items» block."""
-    intro = block_intro(heading)
-    if intro is None:
+    """The bullets of a block: directly under its heading, or under its intro."""
+    first = heading.getnext()
+    if first is None or first.tag != W + "p":
+        return []
+    if is_item_bullet(first):
+        start = first
+    elif is_plain_paragraph(first):
+        start = first.getnext()
+    else:
         return []
     items = []
-    sibling = intro.getnext()
+    sibling = start
     while sibling is not None and sibling.tag == W + "p" and is_item_bullet(sibling):
         items.append(sibling)
         sibling = sibling.getnext()
@@ -571,10 +648,16 @@ def sync_list_block(
     """Bring the introduction and the bullets of `heading`'s block up to date.
 
     Unlike the steps that only add what is missing, this one owns its block: the
-    wording in the constants wins, extra bullets go and missing ones arrive.
+    wording in the constants wins, extra bullets go and missing ones arrive. An
+    empty `intro_text` means the bullets open the block on their own, which is
+    how «Не входит в объём предложения» reads.
     """
     intro = block_intro(heading)
-    if intro is None:
+    if not intro_text:
+        if intro is not None:
+            intro.getparent().remove(intro)
+            intro = None
+    elif intro is None:
         intro = paragraph_text_of(intro_example, intro_text)
         heading.addnext(intro)
     elif word_text(intro).strip() != intro_text:
@@ -586,7 +669,7 @@ def sync_list_block(
     for extra in current[len(items) :]:
         extra.getparent().remove(extra)
     kept = current[: len(items)]
-    anchor = kept[-1] if kept else intro
+    anchor = kept[-1] if kept else (intro if intro is not None else heading)
     for text in items[len(kept) :]:
         bullet = bullet_paragraph(text)
         anchor.addnext(bullet)
@@ -780,18 +863,18 @@ def _apply_title_and_header_bookmarks(
     for child in list(number_p):
         if child.tag != W + "pPr":
             number_p.remove(child)
-    number_start, number_end = bookmark("Num", 23)
+    number_start, number_end = bookmark("Num", free_bookmark_id(xml_root(number_p)))
     number_p.extend(
         (number_start, run(NUMBER_PLACEHOLDER, original_run), number_end)
     )
 
-    for cell, name, number in ((customer_cell, "Customer", 24), (object_cell, "Object", 25)):
+    for cell, name in ((customer_cell, "Customer"), (object_cell, "Object")):
         p = cell.find("w:p", NS)
         assert p is not None
         for child in list(p):
             if child.tag != W + "pPr":
                 p.remove(child)
-        add_empty_bookmark(p, name, number)
+        add_empty_bookmark(p, name, free_bookmark_id(xml_root(p)))
 
     if subject_cell is not None:
         subject_p = subject_cell.find("w:p", NS)
@@ -799,7 +882,7 @@ def _apply_title_and_header_bookmarks(
         for child in list(subject_p):
             if child.tag != W + "pPr":
                 subject_p.remove(child)
-        subject_start, subject_end = bookmark("Subject", 29)
+        subject_start, subject_end = bookmark("Subject", free_bookmark_id(xml_root(subject_p)))
         subject_p.extend(
             (
                 subject_start,
@@ -826,7 +909,7 @@ def _apply_title_and_header_bookmarks(
     for child in list(running_header):
         if child.tag != W + "pPr":
             running_header.remove(child)
-    header_start, header_end = bookmark("HeaderNum", 1000)
+    header_start, header_end = bookmark("HeaderNum", free_bookmark_id(header))
     # The running head repeats the number of the first page: a REF field on the
     # «Num» bookmark keeps it in step when the template is filled in by hand,
     # and the generators replace the whole bookmark with the sheet value.
@@ -848,21 +931,24 @@ def _fix_notes_paragraph(notes: etree._Element) -> None:
 
 # ---------------------------------------------------------------------------
 # Content blocks of the proposal. Every step is idempotent: it looks for its
-# block first, so running the tool twice leaves the template untouched.
+# block first, so running the tool twice leaves the template identical.
 #
-# A block that is already there is left as it is, which keeps hand edits in the
-# document safe. Re-wording one of the constants above therefore does not
-# rewrite an existing template: start from a pristine copy of the asset and run
-# the tool again. The exceptions, which this step always rewrites, are the
-# mounting note, the appendix numbering placeholders and the running head.
+# The steps that own a block rewrite it from the constants above — the blocks of
+# the shortened page two, the site readiness list, the mounting note, the Gantt
+# chart, the appendix numbering and the running head. Those are the parts the
+# review rewrote, and the constants are where their wording lives. Steps that
+# only add what is missing leave the rest of the document alone, so paragraphs
+# edited by hand elsewhere survive: start from a pristine copy of the asset when
+# re-wording one of those constants.
 # ---------------------------------------------------------------------------
 def rework_offer_terms(body: etree._Element) -> None:
-    """Page two: what the offer rests on, what it excludes, what the customer owes.
+    """Page two: what the offer rests on and what it excludes.
 
     The general note («may be refined») becomes «Исходные данные и допущения»
-    naming the source document and the two events that trigger a re-estimate, the
-    list of assumptions becomes «Не входит в объём предложения», and a new
-    section states the customer's obligations.
+    naming the source document, and the list of assumptions becomes «Не входит в
+    объём предложения». A «Обязательства Заказчика» block of an earlier revision
+    is removed: Appendix 5 states the customer's duties in detail, and the
+    shortened page two does not repeat them.
     """
     basis = section_heading(body, BASIS_HEADING, LEGACY_NOTE_HEADING)
     if basis is None:
@@ -878,11 +964,15 @@ def rework_offer_terms(body: etree._Element) -> None:
         last_of_block(basis).addnext(exclusions)
     sync_list_block(exclusions, EXCLUSIONS_INTRO, EXCLUSIONS_ITEMS, intro)
 
-    duties = section_heading(body, DUTIES_HEADING)
-    if duties is None:
-        duties = paragraph_text_of(basis, DUTIES_HEADING, bold=True)
-        last_of_block(exclusions).addnext(duties)
-    sync_list_block(duties, DUTIES_INTRO, DUTIES_ITEMS, intro)
+    duties = section_heading(body, LEGACY_DUTIES_HEADING)
+    if duties is not None:
+        removed = [duties, *block_items(duties)]
+        intro_paragraph = block_intro(duties)
+        if intro_paragraph is not None:
+            removed.insert(1, intro_paragraph)
+        for paragraph in removed:
+            if paragraph.getparent() is not None:
+                paragraph.getparent().remove(paragraph)
 
 
 def add_project_duration(body: etree._Element) -> None:
@@ -997,10 +1087,12 @@ def add_reference_appendix_labels(body: etree._Element) -> None:
 
 
 def add_gost34_documents(body: etree._Element) -> None:
-    """Appendix 4: the ГОСТ 34 set, the handover documents, and no duplicates.
+    """Appendix 4: the document set, the handover documents, and no duplicates.
 
-    The group owns its rows: anything the constants list is put back in order,
-    and the two general rows that repeated the specific items are dropped.
+    The step owns its rows: anything the constants list is put back in order, the
+    two general rows that repeated the specific items are dropped, and the shaded
+    group row of an earlier revision («РКД и ЭД по ГОСТ 34») is removed so the
+    list starts at 1.
     """
     table = find_table(body, DOCUMENTS_ANCHOR)
     for cell in table.iter(W + "tc"):
@@ -1011,14 +1103,13 @@ def add_gost34_documents(body: etree._Element) -> None:
             if word_text(paragraph).strip() == DOCUMENTS_STAGE_NOTE:
                 cell.remove(paragraph)
 
+    for row in table.findall(W + "tr"):
+        if word_text(row).strip() == LEGACY_GROUP_ROW:
+            table.remove(row)
+
     rows = table.findall(W + "tr")
     example = next(row for row in rows[1:] if len(row.findall(W + "tc")) > 1)
-    anchor = next(
-        (row for row in rows if word_text(row).strip() == RKD_GROUP_TITLE), None
-    )
-    if anchor is None:
-        anchor = group_row(example, RKD_GROUP_TITLE)
-        rows[0].addnext(anchor)
+    anchor = rows[0]
     for text in RKD_DOCUMENTS:
         match = next(
             (row for row in table.findall(W + "tr") if row_label(row) == text), None
@@ -1041,7 +1132,11 @@ def add_gost34_documents(body: etree._Element) -> None:
 
 
 def add_mounting_scope(body: etree._Element) -> None:
-    """Appendix 5: extra works, site readiness requirements, a stronger note."""
+    """Appendix 5: extra works, site readiness requirements, a stronger note.
+
+    The readiness block has no heading: an introductory sentence and its bullets
+    repeat on every run, so a hand edit cannot leave two copies behind.
+    """
     table = find_table(body, MOUNTING_ANCHOR)
     rows = table.findall(W + "tr")
     example = rows[1]
@@ -1063,14 +1158,51 @@ def add_mounting_scope(body: etree._Element) -> None:
     if word_text(note).strip() != MOUNTING_NOTE:
         set_paragraph_text(note, MOUNTING_NOTE)
 
-    if has_paragraph(body, SITE_READINESS_HEADING):
-        return
-    blocks = [paragraph_text_of(note, SITE_READINESS_HEADING, bold=True)]
-    blocks.append(paragraph_text_of(note, SITE_READINESS_INTRO))
-    blocks.extend(bullet_paragraph(text) for text in SITE_READINESS)
-    position = body.index(note)
-    for offset, block in enumerate(blocks):
-        body.insert(position + offset, block)
+    for heading in [
+        paragraph
+        for paragraph in body.findall(W + "p")
+        if word_text(paragraph).strip() == LEGACY_SITE_READINESS_HEADING
+    ]:
+        body.remove(heading)
+
+    intros = [
+        paragraph
+        for paragraph in body.findall(W + "p")
+        if word_text(paragraph).strip() == SITE_READINESS_INTRO
+    ]
+    if not intros:
+        intro = paragraph_text_of(note, SITE_READINESS_INTRO)
+        note.addprevious(intro)
+        intros = [intro]
+    # A previous revision kept the nine-item list, and a run that added the list
+    # without finding its heading left a second copy behind: keep one block.
+    for extra in intros[1:]:
+        following = extra.getnext()
+        while following is not None and following.tag == W + "p" and is_item_bullet(
+            following
+        ):
+            following.getparent().remove(following)
+            following = extra.getnext()
+        body.remove(extra)
+    intro = intros[0]
+    current = []
+    following = intro.getnext()
+    while following is not None and following.tag == W + "p" and is_item_bullet(
+        following
+    ):
+        current.append(following)
+        following = following.getnext()
+    for paragraph, text in zip(current, SITE_READINESS, strict=False):
+        if word_text(paragraph).strip() != text:
+            set_paragraph_text(paragraph, text)
+    for extra in current[len(SITE_READINESS) :]:
+        extra.getparent().remove(extra)
+    kept = current[: len(SITE_READINESS)]
+    anchor = kept[-1] if kept else intro
+    for text in SITE_READINESS[len(kept) :]:
+        bullet = bullet_paragraph(text)
+        anchor.addnext(bullet)
+        anchor = bullet
 
 
 def add_terms_page(body: etree._Element) -> None:
@@ -1293,29 +1425,105 @@ def gantt_table() -> etree._Element:
     return table
 
 
+def is_gantt_table(table: etree._Element) -> bool:
+    """The chart, as opposed to the tables of the document: it starts with «Этап»."""
+    rows = table.findall(W + "tr")
+    if not rows:
+        return False
+    cells = rows[0].findall(W + "tc")
+    return bool(cells) and word_text(cells[0]).strip() == "Этап"
+
+
+def is_blank_paragraph(element: etree._Element) -> bool:
+    """An empty spacer paragraph: a paragraph mark and its properties, nothing else."""
+    if element.tag != W + "p" or word_text(element):
+        return False
+    return all(child.tag == W + "pPr" for child in element)
+
+
+def blank_paragraph_example(body: etree._Element) -> etree._Element | None:
+    """A spacer paragraph to clone, so the new one carries the same spacing."""
+    for paragraph in body.findall(W + "p"):
+        if is_blank_paragraph(paragraph):
+            return paragraph
+    return None
+
+
 def add_gantt(body: etree._Element) -> None:
-    """Appendix 8: the same plan as a bar chart, under the table of stages."""
-    if has_paragraph(body, GANTT_HEADING):
-        return
+    """Appendix 8: the same plan as a bar chart, right under the stages.
+
+    The chart is generated data — one cell per week, no prose — so this step owns
+    both the chart and the spacers around it: the chart in place is rebuilt from
+    the constants, which also repairs the layout of an earlier revision (a spare
+    column at the right edge, a total row merged one column too wide). A template
+    of an earlier revision may still carry the heading and the caption of that
+    revision; both go.
+    """
     plan = find_table(body, GANTT_ANCHOR)
-    heading = paragraph_text_of(
-        find_paragraph(body, SITE_READINESS_HEADING), GANTT_HEADING, bold=True
-    )
-    caption = paragraph_text_of(find_paragraph(body, MOUNTING_NOTE_ANCHOR), GANTT_CAPTION)
+    for table in [table for table in body.findall(W + "tbl") if is_gantt_table(table)]:
+        body.remove(table)
+
     position = body.index(plan) + 1
-    for offset, element in enumerate((heading, caption, gantt_table())):
-        body.insert(position + offset, element)
+    while position < len(body) and is_blank_paragraph(body[position]):
+        body.remove(body[position])
+    body.insert(position, gantt_table())
+
+    # One spacer after the chart, the way the other appendices are separated.
+    after = position + 1
+    spacers = 0
+    while after < len(body) and is_blank_paragraph(body[after]):
+        if spacers:
+            body.remove(body[after])
+        else:
+            spacers += 1
+            after += 1
+    if not spacers:
+        example = blank_paragraph_example(body)
+        if example is not None:
+            body.insert(after, drop_para_ids(deepcopy(example)))
+
+    stale = {LEGACY_GANTT_HEADING, LEGACY_GANTT_CAPTION}
+    for paragraph in body.findall(W + "p"):
+        if word_text(paragraph).strip() in stale:
+            body.remove(paragraph)
 
 
-def raise_text_sizes(element: etree._Element) -> int:
-    """Bring every 10 pt / 11 pt run up to the 12 pt house size."""
+def is_inside(element: etree._Element, ancestor: etree._Element) -> bool:
+    """Whether `element` sits anywhere below `ancestor`."""
+    parent = element.getparent()
+    while parent is not None:
+        if parent is ancestor:
+            return True
+        parent = parent.getparent()
+    return False
+
+
+def raise_text_sizes(
+    element: etree._Element, *, keep_inside: tuple[etree._Element, ...] = ()
+) -> int:
+    """Bring every 10 pt / 11 pt run up to the 12 pt house size.
+
+    Everything below `keep_inside` keeps its own size: the calendar-plan table
+    of Appendix 8 is deliberately set at 11 pt.
+    """
     changed = 0
     for tag in ("sz", "szCs"):
         for size in element.iter(W + tag):
+            if any(is_inside(size, kept) for kept in keep_inside):
+                continue
             if size.get(W + "val") in RETIRED_SIZES:
                 size.set(W + "val", HOUSE_SIZE)
                 changed += 1
     return changed
+
+
+def calendar_plan_tables(document: etree._Element) -> tuple[etree._Element, ...]:
+    """The table of stages in Appendix 8: the one with the «Плановая дата» column."""
+    return tuple(
+        table
+        for table in document.findall(f".//{W}tbl")
+        if CALENDAR_PLAN_ANCHOR in word_text(table)
+    )
 
 
 def apply_font_policy(
@@ -1324,9 +1532,10 @@ def apply_font_policy(
     """Apply the 12 pt rule to the text, its numbering and the styles it uses.
 
     Headers and footers are left alone: they carry their own small sizes, and
-    the running head is deliberately quieter than the body text.
+    the running head is deliberately quieter than the body text. So is the
+    calendar-plan table of Appendix 8, which is set at 11 pt on purpose.
     """
-    raise_text_sizes(document)
+    raise_text_sizes(document, keep_inside=calendar_plan_tables(document))
 
     used_numbers = {number.get(W + "val") for number in document.iter(W + "numId")}
     used_abstract = {
@@ -1417,7 +1626,7 @@ def patch_template() -> None:
     _apply_title_and_header_bookmarks(body, header)
 
     spec_p = etree.Element(W + "p")
-    add_empty_bookmark(spec_p, "Spec_Table", 26)
+    add_empty_bookmark(spec_p, "Spec_Table", free_bookmark_id(document))
     body.insert(body.index(notes), spec_p)
 
     rework_offer_terms(body)
@@ -1431,6 +1640,7 @@ def patch_template() -> None:
     add_terms_page(body)
     # Last, so the paragraphs the content steps cloned are normalised too.
     apply_font_policy(document, styles, numbering)
+    drop_unpaired_bookmarks(document)
 
     parts = {
         "word/document.xml": write_xml(document),
