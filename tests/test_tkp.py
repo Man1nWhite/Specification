@@ -8,6 +8,7 @@ from zipfile import ZipFile
 
 import docx
 import openpyxl
+from docx.shared import Pt
 from lxml import etree
 from pyopenvba import ExcelFile
 from pyopenvba.apps.excel import ExcelApplication
@@ -17,6 +18,7 @@ from generate_tkp import (
     build_preview_rows,
     clean_text,
     find_default_template,
+    format_number,
     format_qty,
     generate_tkp,
     read_tkp_data,
@@ -43,6 +45,41 @@ def normalise_preview_rows(rows):
             qty = int(qty)
         normalised.append((num, description, article or "", unit, qty, marker))
     return normalised
+
+
+def read_part(name: str):
+    """Parse one part of the shipped template."""
+    with ZipFile(TEMPLATE) as archive:
+        return etree.fromstring(archive.read(name))
+
+
+def element_text(element) -> str:
+    return "".join(t.text or "" for t in element.iter(f"{{{W}}}t"))
+
+
+def template_body():
+    body = read_part("word/document.xml").find(f"{{{W}}}body")
+    assert body is not None
+    return body
+
+
+def rows_of(table) -> list[list[str]]:
+    """The cell texts of every row; a merged row yields a single cell."""
+    return [
+        [
+            " ".join("".join(p.itertext()) for p in cell.findall(f"{{{W}}}p")).strip()
+            for cell in row.findall(f"{{{W}}}tc")
+        ]
+        for row in table.findall(f"{{{W}}}tr")
+    ]
+
+
+def find_table(body, needle: str):
+    """The table under `body` whose text mentions `needle`."""
+    for table in body.findall(f"{{{W}}}tbl"):
+        if needle in element_text(table):
+            return table
+    raise AssertionError(f"No table contains {needle!r}")
 
 
 class TKPTest(unittest.TestCase):
@@ -157,6 +194,16 @@ class TKPTest(unittest.TestCase):
             "4 (четыре) дня",
             "Срок начала работ согласовывается Сторонами в договоре",
             "Дата начала выполнения работ согласовывается в договоре",
+            # This review: the vague note, the three-day advance, the works
+            # inside the delivery terms, the unlinked МИРТС, the old heading and
+            # the two rows that duplicated the specific documents.
+            "могут быть уточнены",
+            "в течение 3 (трёх) календарных дней",
+            "и выполнение работ по созданию АСУ ТП осуществляется",
+            "Система «МИРТС» является основой",
+            "Допущения:",
+            "Документация на ППО",
+            "Эксплуатационная документация (руководство оператора, паспорта)",
         ):
             self.assertNotIn(broken, text)
         for fixed in (
@@ -166,20 +213,21 @@ class TKPTest(unittest.TestCase):
             "для третьих лиц",
             "оформлением Акта о завершении ПНР",
             "При изменении исходных данных Спецификация",
-            "3 (трёх)",
             "Объём поставки",
             "выдаётся сертификат",
             "надёжность",
             "за счёт трёхуровневой",
             "собственности к Заказчику",
-            "по созданию АСУ ТП осуществляется на склад Заказчика по адресу:",
+            "для создания АСУ ТП осуществляется на склад Заказчика по адресу:",
             "Технико-коммерческое предложение",
             "Перечень передаваемой документации",
             "Кабельный журнал",
             "Исполнительные схемы",
             "Акты скрытых работ",
-            "Документация на ППО",
-            "Эксплуатационная документация (руководство оператора, паспорта)",
+            "Руководство оператора",
+            "Руководство администратора",
+            "Паспорта и сертификаты соответствия на покупное оборудование",
+            "Акт выполненных пусконаладочных работ",
             "Настройка контроллеров ПТК",
             "оперативного персонала и инженеров АСУ ТП",
             "10 (десять) недель с момента окончания работ по этапу № 6",
@@ -202,6 +250,19 @@ class TKPTest(unittest.TestCase):
             "Дата проведения обучения согласуется заранее",
             "Оплату командировочных расходов (трансфер до Москвы и обратно, "
             "проживание, питание) Заказчик осуществляет самостоятельно",
+            # Payment terms: the second payment and the title pass with the УПД,
+            # the stage advance is seven days, the invoice follows the act.
+            "универсального передаточного документа (УПД)",
+            "Право собственности на оборудование переходит к Заказчику с даты "
+            "подписания УПД",
+            "7 (семи) календарных дней с даты начала этапа",
+            "Возможен зачёт аванса",
+            "счёт выставляется после подписания Сторонами акта оказанных услуг",
+            # The certification now ties АРКС400 to the measuring system.
+            "ПТК АРКС400 входит в состав системы «МИРТС»",
+            # The whole project has a duration, on page two and in the chart.
+            "Общий срок реализации проекта",
+            "35 недель",
         ):
             self.assertIn(fixed, text)
 
@@ -245,27 +306,256 @@ class TKPTest(unittest.TestCase):
         self.assertEqual(first.text, "ТКП")
 
     def test_template_notes_who_lays_the_external_cables(self):
-        """Appendix 5 states that the customer wires the field cables."""
-        with ZipFile(TEMPLATE) as archive:
-            document = etree.fromstring(archive.read("word/document.xml"))
-        body = document.find(f"{{{W}}}body")
-        assert body is not None
-        children = list(body)
-        mounting = next(
-            child
-            for child in children
-            if child.tag == f"{{{W}}}tbl"
-            and "Монтаж шкафов на подготовленные основания"
-            in "".join(t.text or "" for t in child.iter(f"{{{W}}}t"))
+        """Appendix 5 says who wires the field cables and what is not included."""
+        note = next(
+            paragraph
+            for paragraph in template_body().findall(f"{{{W}}}p")
+            if element_text(paragraph).startswith("Примечание: Прокладка и расключение")
         )
-        note = children[children.index(mounting) + 1]
-        assert note.tag == f"{{{W}}}p"
-        text = "".join(t.text or "" for t in note.iter(f"{{{W}}}t"))
-        self.assertEqual(
+        text = element_text(note)
+        self.assertTrue(
+            text.startswith(
+                "Примечание: Прокладка и расключение внешних кабельных связей от "
+                "датчиков/механизмов до шкафов управления выполняются силами Заказчика."
+            ),
             text,
-            "Примечание: Прокладка и расключение внешних кабельных связей от "
-            "датчиков/механизмов до шкафов управления выполняются силами Заказчика.",
         )
+        for excluded in (
+            "кабеленесущих систем",
+            "проходок",
+            "огнезащита",
+            "демонтаж",
+        ):
+            self.assertIn(excluded, text)
+
+    def test_template_lists_site_readiness_requirements(self):
+        """Appendix 5 tells the customer how the site has to be prepared."""
+        body = template_body()
+        paragraphs = body.findall(f"{{{W}}}p")
+        texts = [element_text(p).strip() for p in paragraphs]
+        self.assertIn("Требования к готовности площадки:", texts)
+        heading = texts.index("Требования к готовности площадки:")
+        note = next(
+            index
+            for index, text in enumerate(texts)
+            if text.startswith("Примечание: Прокладка")
+        )
+        mounting = find_table(body, "Монтаж шкафов на подготовленные основания")
+        # Order: the works table, then the readiness block, then the note.
+        self.assertLess(body.index(mounting), body.index(paragraphs[heading]))
+        self.assertLess(body.index(paragraphs[heading]), body.index(paragraphs[note]))
+        block = " ".join(texts[heading:note])
+        for topic in (
+            "Помещение",
+            "Температура и влажность",
+            "Основания и фальшпол",
+            "Контур заземления",
+            "Электропитание",
+            "Освещение",
+            "Пропускной режим",
+            "Бытовки",
+            "Места складирования",
+        ):
+            self.assertIn(topic, block)
+        self.assertIn("~220 В", block)
+        self.assertIn("~380 В", block)
+
+    def page_two_texts(self) -> list[str]:
+        return [element_text(p).strip() for p in template_body().findall(f"{{{W}}}p")]
+
+    def test_template_names_the_basis_of_the_offer(self):
+        """Page 2 says what the offer rests on and when it is re-estimated."""
+        texts = self.page_two_texts()
+        self.assertIn("Исходные данные и допущения:", texts)
+        basis = texts.index("Исходные данные и допущения:")
+        exclusions = texts.index("Не входит в объём предложения:")
+        parameters = texts.index("Параметры предложения")
+        self.assertLess(parameters, basis)
+        self.assertLess(basis, exclusions)
+        block = " ".join(texts[basis:exclusions])
+        for topic in (
+            "документ-основание",
+            "ревизия",
+            "перечень сигналов АСУ ТП (Приложение 1)",
+            "структура ПТК (Приложение 2)",
+            "10%",
+            "3 месяца",
+            "календарного плана (Приложение 8)",
+        ):
+            self.assertIn(topic, block)
+        # The wording the review rejected: too general to hold anybody to it.
+        self.assertNotIn("могут быть уточнены", block)
+
+    def test_template_lists_what_the_offer_excludes(self):
+        """Page 2 draws the boundary of the supply the review asked for."""
+        texts = self.page_two_texts()
+        self.assertNotIn("Допущения:", texts)
+        heading = texts.index("Не входит в объём предложения:")
+        duties = texts.index("Обязательства Заказчика:")
+        warranty = texts.index("Гарантийные обязательства:")
+        self.assertLess(heading, duties)
+        self.assertLess(duties, warranty)
+        block = " ".join(texts[heading:duties])
+        self.assertIn("не входят", block)
+        for topic in (
+            "датчиков",
+            "исполнительных механизмов",
+            "внешние кабельные связи",
+            "строительная часть",
+            "АРМ и серверов верхнего уровня",
+            "ИБП",
+            "стадий «П» и «Р»",
+            "метрологическая аттестация",
+            "экспертиза промышленной безопасности",
+            "ЗИП",
+            "КИИ",
+            "ФСТЭК России",
+            "надзорных органах",
+        ):
+            self.assertIn(topic, block)
+
+    def test_template_lists_the_customer_duties(self):
+        """Page 2 says what the customer owes for the plan to hold."""
+        texts = self.page_two_texts()
+        heading = texts.index("Обязательства Заказчика:")
+        warranty = texts.index("Гарантийные обязательства:")
+        block = " ".join(texts[heading:warranty])
+        for topic in (
+            "готовность площадки",
+            "основания под шкафы",
+            "электропитание",
+            "контур заземления",
+            "климатические условия",
+            "Монтажные работы",
+            "10 (десяти) рабочих дней",
+            "пропусков",
+            "технологическую среду",
+            "ответственного представителя по верхнему уровню",
+        ):
+            self.assertIn(topic, block)
+
+    def test_template_states_the_total_project_duration(self):
+        """The parameters table sums the stages up to 35 weeks."""
+        body = template_body()
+        rows = rows_of(find_table(body, "ИТОГО без НДС"))
+        labels = [row[1] if len(row) > 2 else row[0] for row in rows]
+        self.assertIn("Общий срок реализации проекта", labels)
+        duration = rows[labels.index("Общий срок реализации проекта")]
+        self.assertEqual(duration[2], "35 недель")
+        # It closes the list of stages, before the money.
+        self.assertLess(
+            labels.index("Обучение персонала"),
+            labels.index("Общий срок реализации проекта"),
+        )
+        self.assertLess(
+            labels.index("Общий срок реализации проекта"), labels.index("ИТОГО без НДС")
+        )
+
+    def test_template_ends_with_terms_and_abbreviations(self):
+        """The last page explains the abbreviations used in the proposal."""
+        body = template_body()
+        paragraphs = body.findall(f"{{{W}}}p")
+        heading = next(
+            p for p in paragraphs if element_text(p).strip() == "Термины и сокращения"
+        )
+        # It opens a page of its own at the very end of the document.
+        self.assertIsNotNone(heading.find(f"{{{W}}}pPr/{{{W}}}pageBreakBefore"))
+        self.assertEqual(paragraphs[-1].getprevious(), heading)
+        terms = rows_of(body.findall(f"{{{W}}}tbl")[-1])
+        self.assertEqual(terms[0], ["Сокращение", "Расшифровка"])
+        self.assertEqual(
+            [row[0] for row in terms[1:9]],
+            ["ПТК", "ППО", "РКД", "УСО", "ЗПИ", "ПСИ", "АРМ", "КИИ"],
+        )
+        abbreviations = {row[0] for row in terms[1:]}
+        for used in (
+            "АСУ ТП", "ЗИП", "ИБП", "ИМ", "ЛВС", "НДС", "ПД", "ПМИ", "ПНР", "СИ",
+            "ТО", "ФСТЭК России", "ЭД",
+        ):
+            self.assertIn(used, abbreviations)
+        for row in terms[1:]:
+            self.assertEqual(len(row), 2)
+            self.assertTrue(row[1], row)
+
+    def test_template_body_text_is_twelve_point(self):
+        """10 pt and 11 pt are retired: the document is set in 12 pt ("24")."""
+        document = read_part("word/document.xml")
+        styles = read_part("word/styles.xml")
+        retired = {"20", "22"}
+        sizes = {
+            size.get(f"{{{W}}}val")
+            for tag in ("sz", "szCs")
+            for size in document.iter(f"{{{W}}}{tag}")
+        }
+        self.assertEqual(sizes & retired, set())
+        defaults = styles.find(f"{{{W}}}docDefaults")
+        for tag in ("sz", "szCs"):
+            self.assertEqual(
+                defaults.find(f".//{{{W}}}{tag}").get(f"{{{W}}}val"), "24", tag
+            )
+        used = {style.get(f"{{{W}}}val") for style in document.iter(f"{{{W}}}pStyle")}
+        used |= {style.get(f"{{{W}}}val") for style in document.iter(f"{{{W}}}rStyle")}
+        for style in styles.findall(f"{{{W}}}style"):
+            if style.get(f"{{{W}}}styleId") not in used:
+                continue
+            own = {
+                size.get(f"{{{W}}}val")
+                for tag in ("sz", "szCs")
+                for size in style.iter(f"{{{W}}}{tag}")
+            }
+            self.assertEqual(own & retired, set(), style.get(f"{{{W}}}styleId"))
+
+    def test_running_header_takes_the_number_from_the_first_page(self):
+        """The running head repeats the «Номер» row of the first page."""
+        header = read_part("word/header1.xml")
+        paragraph = next(
+            p
+            for p in header.iter(f"{{{W}}}p")
+            if "Технико-коммерческое предложение" in element_text(p)
+        )
+        starts = read_part("word/document.xml").xpath(
+            ".//w:bookmarkStart[@w:name='Num']", namespaces=NS
+        )
+        number = element_text(starts[0].getparent())
+        self.assertTrue(number.startswith("№"), number)
+        self.assertEqual(
+            element_text(paragraph), f"Технико-коммерческое предложение {number}"
+        )
+        self.assertIn(
+            "REF Num",
+            " ".join(i.text or "" for i in paragraph.iter(f"{{{W}}}instrText")),
+        )
+        # The field sits inside the HeaderNum bookmark, which both generators
+        # replace with the number read from the workbook.
+        children = list(paragraph)
+        start = next(
+            index
+            for index, child in enumerate(children)
+            if child.tag == f"{{{W}}}bookmarkStart"
+            and child.get(f"{{{W}}}name") == "HeaderNum"
+        )
+        end = next(
+            index
+            for index, child in enumerate(children)
+            if child.tag == f"{{{W}}}bookmarkEnd"
+            and child.get(f"{{{W}}}id") == children[start].get(f"{{{W}}}id")
+        )
+        field = next(
+            index
+            for index, child in enumerate(children)
+            if child.find(f"{{{W}}}fldChar") is not None
+        )
+        self.assertLess(start, field)
+        self.assertLess(field, end)
+
+    def test_number_keeps_a_single_sign(self):
+        """The head reads «…предложение № 104/1…», never «№ № 104/1»."""
+        self.assertEqual(format_number("104/1 от 16.10.2026"), "№ 104/1 от 16.10.2026")
+        self.assertEqual(format_number("№ 104/1 от 16.10.2026"), "№ 104/1 от 16.10.2026")
+        self.assertEqual(format_number("№104/1"), "№ 104/1")
+        self.assertEqual(format_number("  12/3  "), "№ 12/3")
+        self.assertEqual(format_number(None), "")
+        self.assertEqual(format_number("#REF!"), "")
 
     def test_template_uses_the_reviewed_content(self):
         """Content changes from the document review: rows, order, terms, titles."""
@@ -277,42 +567,60 @@ class TKPTest(unittest.TestCase):
         tables = body.findall(f"{{{W}}}tbl")
 
         def table_rows(index: int) -> list[list[str]]:
-            result = []
-            for tr in tables[index].findall(f"{{{W}}}tr"):
-                cells = tr.findall(f"{{{W}}}tc")
-                result.append(
-                    [
-                        " ".join("".join(p.itertext()) for p in tc.findall(f"{{{W}}}p")).strip()
-                        for tc in cells
-                    ]
-                )
-            return result
+            return rows_of(tables[index])
 
-        # Приложение 4 is now the list of documents handed over to the customer.
+        # Приложение 4 is the list of documents handed over to the customer,
+        # opened by the ГОСТ 34 design and operating documentation set.
+        documents = table_rows(2)
         self.assertEqual(
-            [r[1] for r in table_rows(2)],
+            [row[-1] for row in documents],
             [
                 "Наименование",
+                "РКД и ЭД по ГОСТ 34",
+                "Схема структурная комплекса технических средств автоматизации",
+                "Схемы соединений внешних проводок и таблицы соединений внешних проводок",
+                "Схемы принципиальные и схемы подключений",
+                "Чертежи общего вида шкафов",
+                "Ведомость покупных изделий",
+                "Программа и методика испытаний (ПМИ)",
+                "Протоколы заводских приёмо‑сдаточных испытаний (ЗПИ)",
+                "Протоколы приёмо‑сдаточных испытаний (ПСИ)",
+                "Описание прикладного программного обеспечения (ППО)",
+                "Руководство оператора",
+                "Руководство администратора",
+                "Инструкция по техническому обслуживанию",
+                "Формуляр (паспорт) на оборудование",
+                "Ведомость ЗИП",
                 "Протокол проверки наличия цепи между заземлителями и заземляемыми элементами",
                 "Протокол измерения сопротивления изоляции",
                 "Протокол проверки автоматических выключателей в электроустановках "
-                "напряжением до 1000 В. Оформляется на этапе выполнения монтажных работ",
+                "напряжением до 1000 В.",
                 "Кабельный журнал",
                 "Исполнительные схемы",
                 "Акты скрытых работ",
-                "Документация на ППО",
-                "Эксплуатационная документация (руководство оператора, паспорта)",
+                "Паспорта и сертификаты соответствия на покупное оборудование",
+                "Акт выполненных пусконаладочных работ",
             ],
         )
-        # Приложение 5: mounting, marking, power supply and earthing.
+        # The group title spans both columns, so the rows stay numbered 1..22.
+        self.assertEqual(len(documents[1]), 1)
+        self.assertNotIn(
+            "Оформляется на этапе выполнения монтажных работ", element_text(tables[2])
+        )
+        # Приложение 5: unloading, mounting, marking, power, earthing, cabling.
         self.assertEqual(
-            [r[1] for r in table_rows(3)],
+            [row[-1] for row in table_rows(3)],
             [
                 "Наименование работ",
+                "Разгрузка оборудования и перемещение к месту установки",
                 "Монтаж шкафов на подготовленные основания",
                 "Маркировка шкафов и оборудования",
                 "Подключение питания шкафов",
                 "Заземление шкафов",
+                "Монтаж межшкафных связей",
+                "Монтаж ЛВС и АРМ",
+                "Сборка кроссов",
+                "Маркировка кабелей",
             ],
         )
         # Приложение 6: integration with the upper level comes before the
@@ -322,12 +630,133 @@ class TKPTest(unittest.TestCase):
             works.index("Интеграция с верхним уровнем"), works.index("Комплексное опробование")
         )
         self.assertIn("Настройка контроллеров ПТК", works)
-        # Приложение 4 is listed under the new name in the appendix list.
-        self.assertIn("Перечень передаваемой документации", [r[1] for r in table_rows(1)])
+        # Приложение 4 is listed under the new name, and the reference pages at
+        # the end are listed as the appendices 9 and 10 they now are.
+        appendix_list = table_rows(1)
+        listed = [" ".join(row).strip() for row in appendix_list]
+        self.assertEqual(
+            listed[1:],
+            [
+                "Перечень сигналов АСУ ТП",
+                "Структура ПТК",
+                "Спецификация оборудования",
+                "Перечень передаваемой документации",
+                "Монтажные работы",
+                "Пусконаладочные работы",
+                "Обучение персонала",
+                "Календарный план",
+                "Описание ПТК АРКС400",
+                "О компании «ЭКСАРА»",
+            ],
+        )
+        # Every entry keeps the automatic number of the appendix it names.
+        numbers = [
+            row.find(f".//{{{W}}}numPr/{{{W}}}numId").get(f"{{{W}}}val")
+            for row in tables[1].findall(f"{{{W}}}tr")[1:]
+        ]
+        self.assertEqual(numbers, ["25"] * 10)
         # The document is a technical and commercial proposal, in the title and
         # in the running header.
         self.assertIn("Технико-коммерческое предложение", "".join(body.itertext()))
         self.assertIn("Технико-коммерческое предложение", "".join(header.itertext()))
+
+    def test_template_draws_the_calendar_plan_as_a_gantt_chart(self):
+        """Appendix 8 repeats its stages as bars, one column per week."""
+        body = template_body()
+        plan = find_table(
+            body, "20 (двадцать) недель с даты поступления авансового платежа"
+        )
+        chart = next(
+            table
+            for table in body.findall(f"{{{W}}}tbl")
+            if rows_of(table)[0][0] == "Этап"
+        )
+        heading = next(
+            paragraph
+            for paragraph in body.findall(f"{{{W}}}p")
+            if element_text(paragraph).strip() == "Диаграмма Ганта:"
+        )
+        # Heading, caption and chart follow the table of stages they summarise.
+        self.assertLess(body.index(plan), body.index(heading))
+        self.assertLess(body.index(heading), body.index(chart))
+
+        grid = chart.find(f"{{{W}}}tblGrid").findall(f"{{{W}}}gridCol")
+        self.assertEqual(len(grid), 36)
+        self.assertEqual(int(grid[0].get(f"{{{W}}}w")), 3415)
+        self.assertEqual(sum(int(column.get(f"{{{W}}}w")) for column in grid), 10065)
+
+        rows = rows_of(chart)
+        self.assertEqual(rows[0][0], "Этап")
+        self.assertEqual(rows[0][1:], [str(week) for week in range(1, 36)])
+        stage_rows = chart.findall(f"{{{W}}}tr")
+        for row in stage_rows:
+            span = sum(
+                int(cell.find(f"{{{W}}}tcPr/{{{W}}}gridSpan").get(f"{{{W}}}val"))
+                if cell.find(f"{{{W}}}tcPr/{{{W}}}gridSpan") is not None
+                else 1
+                for cell in row.findall(f"{{{W}}}tc")
+            )
+            self.assertEqual(span, len(grid), element_text(row)[:40])
+
+        # The bars follow the critical path: equipment, factory tests, delivery,
+        # mounting and commissioning add up to the 35 weeks of page two.
+        bars = {}
+        for index in range(1, len(stage_rows) - 1):
+            weeks = [
+                week
+                for week, cell in enumerate(
+                    stage_rows[index].findall(f"{{{W}}}tc")[1:], start=1
+                )
+                if cell.find(f"{{{W}}}tcPr/{{{W}}}shd") is not None
+            ]
+            bars[rows[index][0]] = (weeks[0], weeks[-1], len(weeks))
+        self.assertEqual(
+            bars,
+            {
+                "Разработка РКД": (1, 10, 10),
+                "Разработка ППО": (1, 19, 19),
+                "Заказ и сборка оборудования": (1, 20, 20),
+                "Заводские приёмо‑сдаточные испытания": (21, 21, 1),
+                "Доставка оборудования": (22, 22, 1),
+                "Монтажные работы": (23, 25, 3),
+                "Пусконаладочные работы": (26, 35, 10),
+                "Обучение персонала": (35, 35, 1),
+            },
+        )
+        self.assertEqual(rows[-1], ["Общий срок реализации проекта", "35 недель"])
+
+    def test_template_numbers_the_reference_pages_as_appendices(self):
+        """АРКС400 and the company page are appendices 9 and 10, numbered by field."""
+        paragraphs = template_body().findall(f"{{{W}}}p")
+        labels = [
+            paragraph
+            for paragraph in paragraphs
+            if any(
+                "SEQ App" in (instruction.text or "")
+                for instruction in paragraph.iter(f"{{{W}}}instrText")
+            )
+        ]
+        self.assertEqual(
+            [element_text(label).strip() for label in labels],
+            [f"Приложение {number}" for number in range(1, 11)],
+        )
+        # Each label opens its own page, so the title follows it immediately.
+        titles = [element_text(label.getnext()).strip() for label in labels]
+        self.assertTrue(titles[8].startswith("АРКС400 — современные"), titles[8])
+        self.assertTrue(titles[9].startswith("О компании «ЭКСАРА»"), titles[9])
+        # The terms page stays outside the appendices: no label, no SEQ field.
+        terms = next(
+            paragraph
+            for paragraph in paragraphs
+            if element_text(paragraph).strip() == "Термины и сокращения"
+        )
+        self.assertNotIn(terms, [label.getnext() for label in labels])
+        self.assertFalse(
+            any(
+                "SEQ App" in (instruction.text or "")
+                for instruction in terms.iter(f"{{{W}}}instrText")
+            )
+        )
 
     def test_preview_has_only_the_standard_specification_columns(self):
         # Read the sheet by name: "xl/worksheets/sheet26.xml" would silently point
@@ -565,6 +994,22 @@ class TKPTest(unittest.TestCase):
             )
             self.assertTrue(all(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[2].cells))
             self.assertFalse(any(c.paragraphs[0].runs[0].bold for c in spec_tbl.rows[3].cells))
+            # The specification table follows the 12 pt house size.
+            self.assertEqual(
+                spec_tbl.rows[3].cells[1].paragraphs[0].runs[0].font.size, Pt(12)
+            )
+            # The running head carries the number of the first page, once.
+            head = "".join(
+                t.text or "" for t in doc.sections[0].header._element.iter(f"{{{W}}}t")
+            )
+            self.assertIn(
+                "Технико-коммерческое предложение № 104/1 от 16.10.2026", head
+            )
+            self.assertNotIn("№ №", head)
+            # The field of the template is gone: the head holds the sheet value.
+            self.assertEqual(
+                list(doc.sections[0].header._element.iter(f"{{{W}}}instrText")), []
+            )
 
 
 if __name__ == "__main__":

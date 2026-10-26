@@ -51,7 +51,7 @@ Public Sub СформироватьТКП()
     Set doc = wd.Documents.Add(templatePath)
 
     Set info = НайтиЛист("Наценки-Скидки")
-    number = ЧистыйТекст(info.Range("C2").Value2)
+    number = НомерПредложения(ЧистыйТекст(info.Range("C2").Value2))
     doc.Bookmarks("Num").Range.Text = number
     doc.Bookmarks("Customer").Range.Text = ЧистыйТекст(info.Range("C3").Value2)
     doc.Bookmarks("Object").Range.Text = ЧистыйТекст(info.Range("C4").Value2)
@@ -97,7 +97,7 @@ Public Sub СформироватьТКП()
     tbl.Borders.InsideColor = RGB(191, 191, 191)  ' #BFBFBF
     tbl.Borders.OutsideColor = RGB(191, 191, 191) ' #BFBFBF
     tbl.Range.Font.Name = "Arial"
-    tbl.Range.Font.Size = 10
+    tbl.Range.Font.Size = 12
     tbl.Range.Cells.VerticalAlignment = 1 ' wdCellAlignVerticalCenter
 
     tbl.Rows(1).HeadingFormat = True
@@ -317,6 +317,20 @@ Private Function БлокПоСтроке(ByVal r As Long) As Long
         БлокПоСтроке = 2
     ElseIf r >= 20 And r <= 47 Then
         БлокПоСтроке = 3
+    End If
+End Function
+
+Private Function НомерПредложения(ByVal value As String) As String
+    ' The first page and the running head show the same number, so the «№» sign
+    ' is normalised here instead of having to be typed into the sheet.
+    Dim numberText As String
+    numberText = Trim$(value)
+    If Len(numberText) = 0 Then Exit Function
+    If Left$(numberText, 1) = "№" Then numberText = Trim$(Mid$(numberText, 2))
+    If Len(numberText) = 0 Then
+        НомерПредложения = "№"
+    Else
+        НомерПредложения = "№ " & numberText
     End If
 End Function
 
