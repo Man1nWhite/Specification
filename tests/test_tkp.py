@@ -1,5 +1,6 @@
 """Static packaging checks, headless VBA preview test, and Python generator tests."""
 
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -87,7 +88,6 @@ class TKPTest(unittest.TestCase):
 
     def test_default_template_is_only_the_dotx_asset(self):
         self.assertEqual(find_default_template(ROOT), TEMPLATE)
-
         with TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
             for name in (
@@ -98,6 +98,236 @@ class TKPTest(unittest.TestCase):
                 (base_dir / name).touch()
             with self.assertRaises(FileNotFoundError):
                 find_default_template(base_dir)
+
+    def test_template_has_no_latin_letters_inside_russian_words(self):
+        """A Latin "e" typed instead of "ё" is invisible to the spellchecker.
+
+        The template used to ship "Объeм", "выдаeтся", "приeмо-сдаточные",
+        "надeжность", "счeт" and "трeхуровневой" — every one of them reaches the
+        customer as a typo because Word does not flag a Latin letter inside a
+        Russian word. Only the certificate number "RU.AЖ49.H04589" mixes scripts.
+        """
+        cyrillic = re.compile(r"[Ѐ-ӿ]")
+        latin = re.compile(r"[A-Za-z]")
+        mixed = set()
+        for name in ("word/document.xml", "word/header1.xml", "word/header2.xml"):
+            with ZipFile(TEMPLATE) as archive:
+                root = etree.fromstring(archive.read(name))
+            text = " ".join(t.text or "" for t in root.iter(f"{{{W}}}t"))
+            for token in re.findall(r"[^\W\d_]+", text):
+                if cyrillic.search(token) and latin.search(token):
+                    mixed.add((name, token))
+        self.assertEqual(mixed, {("word/document.xml", "AЖ")})
+
+    def test_template_uses_the_proofread_wording(self):
+        """The wording follows the reference ТКП: «ё», «работ», «Акта», «тайну»."""
+        with ZipFile(TEMPLATE) as archive:
+            root = etree.fromstring(archive.read("word/document.xml"))
+        text = "".join(t.text or "" for t in root.iter(f"{{{W}}}t"))
+        for broken in (
+            "Оплата работы по пунктам",
+            "стоимости работы по этапу",
+            "Комплексного опробование",
+            "третьих сторон и лиц",
+            "оформлением Акт о завершении",
+            "исходных данных, Спецификация",
+            "Приемо-сдаточные испытания",
+            "приема-передачи",
+            "приемки-передачи",
+            "3 (трех)",
+            "собственности Заказчику",
+            "третьим лицам или сторонам",
+            "Монтаж КИПиА",
+            "Монтаж и подключение кабельных линий",
+            "Для управления следующими системами",
+            "контроллеров шкафов диспетчеризации",
+            "Исполнительная документация",
+            "оперативного и инженеров",
+            "заземляющими элементами",
+            "распределенных",
+            "включена в состав средств измерения Госреестра",
+            "пуско-наладочных",
+            "ГОСТ Р ИСО 9001 – 2015",
+            "ГОСТ Р ИСО 45001 – 2020",
+            "~220В",
+            "производителей, номенклатура",
+            "Абельный журнал",
+            "21 неделя",
+            "3 (три) дня",
+            "4 (четыре) дня",
+            "Срок начала работ согласовывается Сторонами в договоре",
+            "Дата начала выполнения работ согласовывается в договоре",
+        ):
+            self.assertNotIn(broken, text)
+        for fixed in (
+            "Оплата работ по пунктам 5–8",
+            "от стоимости работ по этапу",
+            "Комплексное опробование",
+            "для третьих лиц",
+            "оформлением Акта о завершении ПНР",
+            "При изменении исходных данных Спецификация",
+            "3 (трёх)",
+            "Объём поставки",
+            "выдаётся сертификат",
+            "надёжность",
+            "за счёт трёхуровневой",
+            "собственности к Заказчику",
+            "по созданию АСУ ТП осуществляется на склад Заказчика по адресу:",
+            "Технико-коммерческое предложение",
+            "Перечень передаваемой документации",
+            "Кабельный журнал",
+            "Исполнительные схемы",
+            "Акты скрытых работ",
+            "Документация на ППО",
+            "Эксплуатационная документация (руководство оператора, паспорта)",
+            "Настройка контроллеров ПТК",
+            "оперативного персонала и инженеров АСУ ТП",
+            "10 (десять) недель с момента окончания работ по этапу № 6",
+            "Монтаж оборудования",
+            "между заземлителями и заземляемыми элементами",
+            "в электроустановках напряжением до 1000 В",
+            "распределённых АСУ ТП",
+            "внесена в Госреестр средств измерений",
+            "пусконаладочных, интеграционных услуг",
+            "ГОСТ Р ИСО 9001-2015",
+            "ГОСТ Р ИСО 45001-2020",
+            "~220 В, =220 В, =24 В",
+            "третьим лицам без письменного разрешения",
+            "Маркировка шкафов и оборудования",
+            "Подключение питания шкафов",
+            "Заземление шкафов",
+            "22 недели",
+            "7 (семь) дней с момента окончания работ по этапу № 3",
+            "7 (семь) дней с момента окончания работ по этапу № 4",
+            "Дата проведения обучения согласуется заранее",
+            "Оплату командировочных расходов (трансфер до Москвы и обратно, "
+            "проживание, питание) Заказчик осуществляет самостоятельно",
+        ):
+            self.assertIn(fixed, text)
+
+    def test_template_keeps_compound_words_on_one_line(self):
+        """A hyphen at the end of a line vanishes in PDF text extraction.
+
+        «Акта приёма-передачи» used to be read as «приёмапередачи» because the
+        compound was split across two lines in a narrow table cell. A
+        non-breaking hyphen keeps the word in one piece.
+        """
+        with ZipFile(TEMPLATE) as archive:
+            root = etree.fromstring(archive.read("word/document.xml"))
+        text = "".join(t.text or "" for t in root.iter(f"{{{W}}}t"))
+        self.assertIn("Акта приёма‑передачи документации", text)
+        self.assertIn("Протокола приёма‑передачи", text)
+        self.assertIn("Приёмо‑сдаточные испытания", text)
+        self.assertIn("приёмо‑сдаточных испытаний", text)
+        self.assertIn("приёмо‑сдаточные испытания", text)
+        # No plain hyphen is left inside these compounds.
+        for plain in ("приёма-передачи", "приёмо-сдаточные", "приёмо-сдаточных"):
+            self.assertNotIn(plain, text)
+
+    def test_template_document_title_is_tkp(self):
+        """Word names a new document after the template's title property."""
+        with ZipFile(TEMPLATE) as archive:
+            core = etree.fromstring(archive.read("docProps/core.xml"))
+            app = etree.fromstring(archive.read("docProps/app.xml"))
+        title = core.find("{http://purl.org/dc/elements/1.1/}title")
+        self.assertIsNotNone(title)
+        self.assertEqual(title.text, "ТКП")
+        parts = app.find(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties}"
+            "TitlesOfParts"
+        )
+        assert parts is not None
+        first = parts.find(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes}vector"
+            "/{http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes}lpstr"
+        )
+        self.assertIsNotNone(first)
+        self.assertEqual(first.text, "ТКП")
+
+    def test_template_notes_who_lays_the_external_cables(self):
+        """Appendix 5 states that the customer wires the field cables."""
+        with ZipFile(TEMPLATE) as archive:
+            document = etree.fromstring(archive.read("word/document.xml"))
+        body = document.find(f"{{{W}}}body")
+        assert body is not None
+        children = list(body)
+        mounting = next(
+            child
+            for child in children
+            if child.tag == f"{{{W}}}tbl"
+            and "Монтаж шкафов на подготовленные основания"
+            in "".join(t.text or "" for t in child.iter(f"{{{W}}}t"))
+        )
+        note = children[children.index(mounting) + 1]
+        assert note.tag == f"{{{W}}}p"
+        text = "".join(t.text or "" for t in note.iter(f"{{{W}}}t"))
+        self.assertEqual(
+            text,
+            "Примечание: Прокладка и расключение внешних кабельных связей от "
+            "датчиков/механизмов до шкафов управления выполняются силами Заказчика.",
+        )
+
+    def test_template_uses_the_reviewed_content(self):
+        """Content changes from the document review: rows, order, terms, titles."""
+        with ZipFile(TEMPLATE) as archive:
+            document = etree.fromstring(archive.read("word/document.xml"))
+            header = etree.fromstring(archive.read("word/header1.xml"))
+        body = document.find(f"{{{W}}}body")
+        assert body is not None
+        tables = body.findall(f"{{{W}}}tbl")
+
+        def table_rows(index: int) -> list[list[str]]:
+            result = []
+            for tr in tables[index].findall(f"{{{W}}}tr"):
+                cells = tr.findall(f"{{{W}}}tc")
+                result.append(
+                    [
+                        " ".join("".join(p.itertext()) for p in tc.findall(f"{{{W}}}p")).strip()
+                        for tc in cells
+                    ]
+                )
+            return result
+
+        # Приложение 4 is now the list of documents handed over to the customer.
+        self.assertEqual(
+            [r[1] for r in table_rows(2)],
+            [
+                "Наименование",
+                "Протокол проверки наличия цепи между заземлителями и заземляемыми элементами",
+                "Протокол измерения сопротивления изоляции",
+                "Протокол проверки автоматических выключателей в электроустановках "
+                "напряжением до 1000 В. Оформляется на этапе выполнения монтажных работ",
+                "Кабельный журнал",
+                "Исполнительные схемы",
+                "Акты скрытых работ",
+                "Документация на ППО",
+                "Эксплуатационная документация (руководство оператора, паспорта)",
+            ],
+        )
+        # Приложение 5: mounting, marking, power supply and earthing.
+        self.assertEqual(
+            [r[1] for r in table_rows(3)],
+            [
+                "Наименование работ",
+                "Монтаж шкафов на подготовленные основания",
+                "Маркировка шкафов и оборудования",
+                "Подключение питания шкафов",
+                "Заземление шкафов",
+            ],
+        )
+        # Приложение 6: integration with the upper level comes before the
+        # comprehensive test.
+        works = [r[1] for r in table_rows(4)]
+        self.assertLess(
+            works.index("Интеграция с верхним уровнем"), works.index("Комплексное опробование")
+        )
+        self.assertIn("Настройка контроллеров ПТК", works)
+        # Приложение 4 is listed under the new name in the appendix list.
+        self.assertIn("Перечень передаваемой документации", [r[1] for r in table_rows(1)])
+        # The document is a technical and commercial proposal, in the title and
+        # in the running header.
+        self.assertIn("Технико-коммерческое предложение", "".join(body.itertext()))
+        self.assertIn("Технико-коммерческое предложение", "".join(header.itertext()))
 
     def test_preview_has_only_the_standard_specification_columns(self):
         # Read the sheet by name: "xl/worksheets/sheet26.xml" would silently point
@@ -143,10 +373,10 @@ class TKPTest(unittest.TestCase):
             [v[1] for v in group_rows],
             [
                 "Программное обеспечение",
-                "Шкаф 1 ПТК",
-                "Шкаф 1 телекоммуникационное оборудование",
-                "Шкаф 1 шкафное оборудование",
-                "Шкаф 2 шкафное оборудование",
+                "Оборудование ПТК (шкаф 1)",
+                "Телекоммуникационное оборудование для АСУ ТП (шкаф 1)",
+                "Шкафное оборудование ПТК (шкаф 1)",
+                "Шкафное оборудование ПТК (шкаф 2)",
                 "ЗИП",
             ],
         )
@@ -239,7 +469,7 @@ class TKPTest(unittest.TestCase):
         )
         self.assertEqual(vba_rows, py_rows)
         descriptions = [row[1] for row in py_rows]
-        self.assertIn("Шкаф 1 ПТК", descriptions)
+        self.assertIn("Оборудование ПТК (шкаф 1)", descriptions)
         self.assertIn("Модуль ввода", descriptions)
         self.assertIn("Обычная позиция", descriptions)
         self.assertNotIn("Итого по шкафу", descriptions)
