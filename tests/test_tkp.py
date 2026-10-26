@@ -1,6 +1,7 @@
 """Static packaging checks, headless VBA preview test, and Python generator tests."""
 
 import re
+import shutil
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -23,6 +24,7 @@ from generate_tkp import (
     generate_tkp,
     read_tkp_data,
 )
+from tools import sync_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = ROOT / "Gen_TKP.xlsm"
@@ -122,6 +124,47 @@ class TKPTest(unittest.TestCase):
         for name in ("Num", "Customer", "Object", "Subject"):
             self.assertEqual(target[name].getparent().tag, f"{{{W}}}p")
             self.assertEqual(target[name].getparent().getparent().tag, f"{{{W}}}tc")
+
+    def test_bookmark_ids_are_unique_and_paired(self):
+        """Every bookmark opens once and closes once.
+
+        Regression: the sync step created its bookmarks with hard-coded ids
+        (24, 25, 26, 29) that the template already used for its `_Hlk` and `_Toc`
+        marks, so one id stood for two bookmarks and Word offered to repair the
+        file.
+        """
+        document = read_part("word/document.xml")
+        starts = [start.get(f"{{{W}}}id") for start in document.iter(f"{{{W}}}bookmarkStart")]
+        ends = [end.get(f"{{{W}}}id") for end in document.iter(f"{{{W}}}bookmarkEnd")]
+        self.assertEqual(len(starts), len(set(starts)))
+        self.assertEqual(len(ends), len(set(ends)))
+        self.assertEqual(set(starts), set(ends))
+
+    def test_sync_leaves_a_synchronised_template_untouched(self):
+        """The sync step is idempotent on the template it ships.
+
+        The reviewed edition of the template is the source of truth: its short
+        blocks are the decision, not a loss to be restored. Running the step
+        again must therefore change nothing — byte for byte, in every part.
+        """
+        with TemporaryDirectory() as tmp:
+            copy = Path(tmp) / TEMPLATE.name
+            shutil.copy(TEMPLATE, copy)
+            original = sync_assets.TEMPLATE_DOTX
+            sync_assets.TEMPLATE_DOTX = copy
+            try:
+                sync_assets.patch_template()
+                with ZipFile(copy) as archive:
+                    first = {name: archive.read(name) for name in archive.namelist()}
+                sync_assets.patch_template()
+                with ZipFile(copy) as archive:
+                    second = {name: archive.read(name) for name in archive.namelist()}
+            finally:
+                sync_assets.TEMPLATE_DOTX = original
+        self.assertEqual(sorted(first), sorted(second))
+        self.assertEqual(
+            [name for name in sorted(first) if first[name] != second[name]], []
+        )
 
     def test_default_template_is_only_the_dotx_asset(self):
         self.assertEqual(find_default_template(ROOT), TEMPLATE)
@@ -253,8 +296,6 @@ class TKPTest(unittest.TestCase):
             # Payment terms: the second payment and the title pass with the УПД,
             # the stage advance is seven days, the invoice follows the act.
             "универсального передаточного документа (УПД)",
-            "Право собственности на оборудование переходит к Заказчику с даты "
-            "подписания УПД",
             "7 (семи) календарных дней с даты начала этапа",
             "Возможен зачёт аванса",
             "счёт выставляется после подписания Сторонами акта оказанных услуг",
@@ -329,12 +370,18 @@ class TKPTest(unittest.TestCase):
             self.assertIn(excluded, text)
 
     def test_template_lists_site_readiness_requirements(self):
-        """Appendix 5 tells the customer how the site has to be prepared."""
+        """Appendix 5 tells the customer how the site has to be prepared.
+
+        The block has no heading of its own: the sentence above the list
+        introduces it, the way the paragraphs around it introduce theirs. The
+        list is deliberately the short one — site readiness is stated once, in
+        the appendix next to the works it belongs to.
+        """
         body = template_body()
         paragraphs = body.findall(f"{{{W}}}p")
         texts = [element_text(p).strip() for p in paragraphs]
-        self.assertIn("Требования к готовности площадки:", texts)
-        heading = texts.index("Требования к готовности площадки:")
+        self.assertNotIn("Требования к готовности площадки:", texts)
+        intro = texts.index("К началу монтажных работ Заказчик обеспечивает:")
         note = next(
             index
             for index, text in enumerate(texts)
@@ -342,29 +389,40 @@ class TKPTest(unittest.TestCase):
         )
         mounting = find_table(body, "Монтаж шкафов на подготовленные основания")
         # Order: the works table, then the readiness block, then the note.
-        self.assertLess(body.index(mounting), body.index(paragraphs[heading]))
-        self.assertLess(body.index(paragraphs[heading]), body.index(paragraphs[note]))
-        block = " ".join(texts[heading:note])
+        self.assertLess(body.index(mounting), body.index(paragraphs[intro]))
+        self.assertLess(body.index(paragraphs[intro]), body.index(paragraphs[note]))
+        block = texts[intro:note]
         for topic in (
-            "Помещение",
-            "Температура и влажность",
-            "Основания и фальшпол",
-            "Контур заземления",
-            "Электропитание",
-            "Освещение",
-            "Пропускной режим",
-            "Бытовки",
-            "Места складирования",
+            "основания и фальшпол",
+            "контур заземления",
+            "электропитание",
+            "освещение",
+            "пропускной режим",
+            "бытовки",
+            "места складирования",
         ):
-            self.assertIn(topic, block)
-        self.assertIn("~220 В", block)
-        self.assertIn("~380 В", block)
+            self.assertTrue(any(item.startswith(topic) for item in block), topic)
+        self.assertIn("~220 В", " ".join(block))
+        self.assertIn("~380 В", " ".join(block))
+        # Every item of the list is one bullet of the same list.
+        items = block[1:]
+        self.assertEqual(len(items), 7)
+        for paragraph in paragraphs[intro + 1 : note]:
+            self.assertIsNotNone(paragraph.find(f"{{{W}}}pPr/{{{W}}}numPr"))
 
     def page_two_texts(self) -> list[str]:
         return [element_text(p).strip() for p in template_body().findall(f"{{{W}}}p")]
 
     def test_template_names_the_basis_of_the_offer(self):
-        """Page 2 says what the offer rests on and when it is re-estimated."""
+        """Page 2 says what the offer rests on.
+
+        The block is one sentence: the review cut the four-bullet list down to
+        the document the offer is based on, because the lines about the two
+        re-estimate triggers only repeated what the parameters table and
+        Appendix 8 already say. The document itself stays inside that sentence —
+        on a line of its own it read as a form to fill in rather than as the
+        basis of the offer.
+        """
         texts = self.page_two_texts()
         self.assertIn("Исходные данные и допущения:", texts)
         basis = texts.index("Исходные данные и допущения:")
@@ -372,31 +430,38 @@ class TKPTest(unittest.TestCase):
         parameters = texts.index("Параметры предложения")
         self.assertLess(parameters, basis)
         self.assertLess(basis, exclusions)
-        block = " ".join(texts[basis:exclusions])
-        for topic in (
-            "документ-основание",
-            "ревизия",
-            "перечень сигналов АСУ ТП (Приложение 1)",
-            "структура ПТК (Приложение 2)",
-            "10%",
-            "3 месяца",
-            "календарного плана (Приложение 8)",
-        ):
-            self.assertIn(topic, block)
+        sentence = texts[basis + 1]
+        self.assertTrue(
+            sentence.startswith(
+                "Предложение подготовлено на основании следующих исходных данных:"
+            ),
+            sentence,
+        )
+        self.assertIn("документ-основание — ____________ (наименование)", sentence)
+        self.assertIn("№ ____ от __.__.____, ревизия ____;", sentence)
+        # No second line and no double colon: the blank follows the same sentence.
+        self.assertNotIn("данных:документ", sentence)
+        self.assertNotIn(":", sentence[sentence.index(":") + 1 :])
+        self.assertEqual(texts[basis + 2], "Условия оплаты:")
         # The wording the review rejected: too general to hold anybody to it.
-        self.assertNotIn("могут быть уточнены", block)
+        self.assertNotIn("могут быть уточнены", " ".join(texts[basis:exclusions]))
 
     def test_template_lists_what_the_offer_excludes(self):
-        """Page 2 draws the boundary of the supply the review asked for."""
+        """Page 2 draws the boundary of the supply.
+
+        The bullets follow the heading directly: the introduction that used to
+        open them («В объём и стоимость настоящего предложения не входят:»)
+        said the same thing twice.
+        """
         texts = self.page_two_texts()
         self.assertNotIn("Допущения:", texts)
+        self.assertNotIn(
+            "В объём и стоимость настоящего предложения не входят:", texts
+        )
         heading = texts.index("Не входит в объём предложения:")
-        duties = texts.index("Обязательства Заказчика:")
         warranty = texts.index("Гарантийные обязательства:")
-        self.assertLess(heading, duties)
-        self.assertLess(duties, warranty)
-        block = " ".join(texts[heading:duties])
-        self.assertIn("не входят", block)
+        self.assertLess(heading, warranty)
+        block = texts[heading:warranty]
         for topic in (
             "датчиков",
             "исполнительных механизмов",
@@ -407,32 +472,29 @@ class TKPTest(unittest.TestCase):
             "стадий «П» и «Р»",
             "метрологическая аттестация",
             "экспертиза промышленной безопасности",
-            "ЗИП",
             "КИИ",
             "ФСТЭК России",
             "надзорных органах",
         ):
-            self.assertIn(topic, block)
+            self.assertIn(topic, " ".join(block))
+        # ЗИП is not excluded here: the note after Appendix 3 already limits the
+        # scope of supply to the items of the specification.
+        self.assertNotIn("ЗИП", " ".join(block))
 
-    def test_template_lists_the_customer_duties(self):
-        """Page 2 says what the customer owes for the plan to hold."""
+    def test_template_drops_the_customer_duties_block(self):
+        """Page 2 no longer repeats what Appendix 5 asks the customer for.
+
+        The block stood between the exclusions and the warranty and listed the
+        same site readiness requirements the mounting appendix states in detail.
+        The abbreviated page two keeps one place for them.
+        """
         texts = self.page_two_texts()
-        heading = texts.index("Обязательства Заказчика:")
+        self.assertNotIn("Обязательства Заказчика:", texts)
+        self.assertNotIn("Заказчик обеспечивает:", texts)
+        # The guarantees follow the exclusions directly.
+        exclusions = texts.index("Не входит в объём предложения:")
         warranty = texts.index("Гарантийные обязательства:")
-        block = " ".join(texts[heading:warranty])
-        for topic in (
-            "готовность площадки",
-            "основания под шкафы",
-            "электропитание",
-            "контур заземления",
-            "климатические условия",
-            "Монтажные работы",
-            "10 (десяти) рабочих дней",
-            "пропусков",
-            "технологическую среду",
-            "ответственного представителя по верхнему уровню",
-        ):
-            self.assertIn(topic, block)
+        self.assertTrue(all(texts[exclusions + 1 : warranty]))
 
     def test_template_states_the_total_project_duration(self):
         """The parameters table sums the stages up to 35 weeks."""
@@ -458,9 +520,22 @@ class TKPTest(unittest.TestCase):
         heading = next(
             p for p in paragraphs if element_text(p).strip() == "Термины и сокращения"
         )
-        # It opens a page of its own at the very end of the document.
+        # It opens a page of its own at the very end of the document: the
+        # heading, the sentence above the table and the table itself, with only
+        # spacer paragraphs after them (Word keeps one before the section
+        # properties, so «nothing but the table follows the heading» is not a
+        # property the document can have).
         self.assertIsNotNone(heading.find(f"{{{W}}}pPr/{{{W}}}pageBreakBefore"))
-        self.assertEqual(paragraphs[-1].getprevious(), heading)
+        tail = list(body)[list(body).index(heading) :]
+        kinds = [etree.QName(child).localname for child in tail]
+        self.assertEqual(kinds[0], "p")
+        self.assertEqual(kinds[1], "p")
+        self.assertEqual(kinds[2], "tbl")
+        for child in tail[3:]:
+            kind = etree.QName(child).localname
+            self.assertIn(kind, {"p", "sectPr"})
+            if kind == "p":
+                self.assertEqual(element_text(child).strip(), "")
         terms = rows_of(body.findall(f"{{{W}}}tbl")[-1])
         self.assertEqual(terms[0], ["Сокращение", "Расшифровка"])
         self.assertEqual(
@@ -478,16 +553,47 @@ class TKPTest(unittest.TestCase):
             self.assertTrue(row[1], row)
 
     def test_template_body_text_is_twelve_point(self):
-        """10 pt and 11 pt are retired: the document is set in 12 pt ("24")."""
+        """10 pt and 11 pt are retired, with one deliberate exception.
+
+        The document is set in 12 pt ("24"), and 10 pt ("20") is gone from the
+        text entirely. The table of stages in Appendix 8 stays at 11 pt ("22"):
+        four columns of names and terms wrap badly at 12 pt, and the table reads
+        as a schedule rather than as prose, so the smaller size is the decision
+        the sync step protects instead of undoing.
+        """
         document = read_part("word/document.xml")
         styles = read_part("word/styles.xml")
-        retired = {"20", "22"}
-        sizes = {
-            size.get(f"{{{W}}}val")
-            for tag in ("sz", "szCs")
-            for size in document.iter(f"{{{W}}}{tag}")
-        }
-        self.assertEqual(sizes & retired, set())
+        self.assertEqual(
+            {size.get(f"{{{W}}}val") for size in document.iter(f"{{{W}}}sz")} & {"20"},
+            set(),
+        )
+        plan = [
+            table
+            for table in document.iter(f"{{{W}}}tbl")
+            if "Плановая дата выполнения" in element_text(table)
+        ]
+        self.assertEqual(len(plan), 1)
+        calendar = plan[0]
+        def in_calendar(size) -> bool:
+            ancestor = size.getparent()
+            while ancestor is not None:
+                if ancestor is calendar:
+                    return True
+                ancestor = ancestor.getparent()
+            return False
+
+        sizes = {}
+        for tag in ("sz", "szCs"):
+            for size in document.iter(f"{{{W}}}{tag}"):
+                value = size.get(f"{{{W}}}val")
+                if value in {"20", "22"}:
+                    sizes.setdefault(value, set()).add(in_calendar(size))
+        # Every 11 pt run of the document belongs to that table, and the table
+        # holds nothing else.
+        self.assertEqual(sizes.get("22"), {True})
+        self.assertEqual(
+            {size.get(f"{{{W}}}val") for size in calendar.iter(f"{{{W}}}sz")}, {"22"}
+        )
         defaults = styles.find(f"{{{W}}}docDefaults")
         for tag in ("sz", "szCs"):
             self.assertEqual(
@@ -503,7 +609,7 @@ class TKPTest(unittest.TestCase):
                 for tag in ("sz", "szCs")
                 for size in style.iter(f"{{{W}}}{tag}")
             }
-            self.assertEqual(own & retired, set(), style.get(f"{{{W}}}styleId"))
+            self.assertEqual(own & {"20"}, set(), style.get(f"{{{W}}}styleId"))
 
     def test_running_header_takes_the_number_from_the_first_page(self):
         """The running head repeats the «Номер» row of the first page."""
@@ -569,14 +675,14 @@ class TKPTest(unittest.TestCase):
         def table_rows(index: int) -> list[list[str]]:
             return rows_of(tables[index])
 
-        # Приложение 4 is the list of documents handed over to the customer,
-        # opened by the ГОСТ 34 design and operating documentation set.
+        # Приложение 4 is the list of documents handed over to the customer. The
+        # shaded «РКД и ЭД по ГОСТ 34» row that used to open it is gone: the
+        # heading of the appendix says the same, and the list starts at 1.
         documents = table_rows(2)
         self.assertEqual(
             [row[-1] for row in documents],
             [
                 "Наименование",
-                "РКД и ЭД по ГОСТ 34",
                 "Схема структурная комплекса технических средств автоматизации",
                 "Схемы соединений внешних проводок и таблицы соединений внешних проводок",
                 "Схемы принципиальные и схемы подключений",
@@ -602,8 +708,8 @@ class TKPTest(unittest.TestCase):
                 "Акт выполненных пусконаладочных работ",
             ],
         )
-        # The group title spans both columns, so the rows stay numbered 1..22.
-        self.assertEqual(len(documents[1]), 1)
+        # Every row is a numbered document, 1..22 — there is no spanning row.
+        self.assertEqual(len(documents[1]), 2)
         self.assertNotIn(
             "Оформляется на этапе выполнения монтажных работ", element_text(tables[2])
         )
@@ -661,29 +767,43 @@ class TKPTest(unittest.TestCase):
         self.assertIn("Технико-коммерческое предложение", "".join(header.itertext()))
 
     def test_template_draws_the_calendar_plan_as_a_gantt_chart(self):
-        """Appendix 8 repeats its stages as bars, one column per week."""
+        """Appendix 8 repeats its stages as bars, one column per week.
+
+        The chart follows the table of stages directly: the appendix is the
+        calendar plan, so a heading and a caption in front of the bars repeated
+        the heading of the appendix itself. The table is laid out to the full
+        page — wider than the text area on purpose, so that the week columns stay
+        legible at 8 pt — and it is the only chart in the document.
+        """
         body = template_body()
         plan = find_table(
             body, "20 (двадцать) недель с даты поступления авансового платежа"
         )
-        chart = next(
-            table
-            for table in body.findall(f"{{{W}}}tbl")
-            if rows_of(table)[0][0] == "Этап"
-        )
-        heading = next(
-            paragraph
-            for paragraph in body.findall(f"{{{W}}}p")
-            if element_text(paragraph).strip() == "Диаграмма Ганта:"
-        )
-        # Heading, caption and chart follow the table of stages they summarise.
-        self.assertLess(body.index(plan), body.index(heading))
-        self.assertLess(body.index(heading), body.index(chart))
+        charts = [
+            table for table in body.findall(f"{{{W}}}tbl") if rows_of(table)[0][0] == "Этап"
+        ]
+        self.assertEqual(len(charts), 1)
+        chart = charts[0]
+        # A section break stands between the table of stages and its chart: the
+        # chart needs the full 14574-twip grid, which does not fit a portrait
+        # page, so it gets a landscape page of its own. Nothing else stands there.
+        self.assertEqual(body.index(plan) + 2, body.index(chart))
+        opening = body[body.index(plan) + 1]
+        self.assertEqual(opening.tag, f"{{{W}}}p")
+        self.assertFalse(element_text(opening).strip())
+        for gone in ("Диаграмма Ганта:", "Полосы показывают недели выполнения этапов"):
+            self.assertNotIn(
+                gone,
+                " ".join(element_text(p) for p in body.findall(f"{{{W}}}p")),
+            )
 
         grid = chart.find(f"{{{W}}}tblGrid").findall(f"{{{W}}}gridCol")
+        widths = [int(column.get(f"{{{W}}}w")) for column in grid]
+        # One label column and 35 week columns — no spare column at the right.
         self.assertEqual(len(grid), 36)
-        self.assertEqual(int(grid[0].get(f"{{{W}}}w")), 3415)
-        self.assertEqual(sum(int(column.get(f"{{{W}}}w")) for column in grid), 10065)
+        self.assertEqual(widths[0], 4949)
+        self.assertEqual(set(widths[1:]), {275})
+        self.assertEqual(sum(widths), 4949 + 35 * 275)
 
         rows = rows_of(chart)
         self.assertEqual(rows[0][0], "Этап")
@@ -724,6 +844,67 @@ class TKPTest(unittest.TestCase):
             },
         )
         self.assertEqual(rows[-1], ["Общий срок реализации проекта", "35 недель"])
+        total = stage_rows[-1].findall(f"{{{W}}}tc")
+        self.assertEqual(
+            total[1].find(f"{{{W}}}tcPr/{{{W}}}gridSpan").get(f"{{{W}}}val"), "35"
+        )
+
+    def test_gantt_chart_is_alone_on_a_landscape_page(self):
+        """The chart is the only thing on a page with the sheet turned.
+
+        The grid is wider than the portrait text area by design, so the appendix
+        hands the chart a section of its own: a break before the chart and one
+        after it, and the rest of the document stays portrait.
+        """
+        body = template_body()
+        plan = find_table(
+            body, "20 (двадцать) недель с даты поступления авансового платежа"
+        )
+        chart = next(
+            table for table in body.findall(f"{{{W}}}tbl") if rows_of(table)[0][0] == "Этап"
+        )
+        opening = body[body.index(plan) + 1]
+        closing = body[body.index(chart) + 1]
+
+        def section_of(paragraph) -> etree._Element:
+            found = paragraph.find(f"{{{W}}}pPr/{{{W}}}sectPr")
+            self.assertIsNotNone(found, element_text(paragraph) or "no section break")
+            return found
+
+        def orientation(sectPr) -> tuple[str, bool]:
+            page = sectPr.find(f"{{{W}}}pgSz")
+            return page.get(f"{{{W}}}w"), page.get(f"{{{W}}}orient") == "landscape"
+
+        # The break before the chart closes the portrait page of the appendix.
+        self.assertFalse(orientation(section_of(opening))[1])
+        # The break after the chart closes the landscape page it sits on.
+        self.assertTrue(orientation(section_of(closing))[1])
+        # The chart is the whole of that section: nothing but the break follows
+        # it, and nothing but the break precedes it.
+        self.assertEqual(body.index(chart), body.index(opening) + 1)
+        self.assertEqual(body.index(closing), body.index(chart) + 1)
+        # Landscape A4 with the margins of the document holds the full grid.
+        page = section_of(closing).find(f"{{{W}}}pgSz")
+        margins = section_of(closing).find(f"{{{W}}}pgMar")
+        text_area = int(page.get(f"{{{W}}}w")) - int(
+            margins.get(f"{{{W}}}left")
+        ) - int(margins.get(f"{{{W}}}right"))
+        self.assertEqual(int(page.get(f"{{{W}}}h")), 11906)
+        self.assertGreaterEqual(text_area, 4949 + 35 * 275)
+        # The chart does not turn the rest of the document with it: the next
+        # section break is a portrait page again (Appendix 9), and so is the
+        # last section (the list of terms).
+        elements = list(body)
+        following = [
+            element.find(f"{{{W}}}pPr/{{{W}}}sectPr")
+            for element in elements[elements.index(closing) + 1 :]
+            if element.tag == f"{{{W}}}p"
+        ]
+        nxt = next(sectPr for sectPr in following if sectPr is not None)
+        self.assertFalse(orientation(nxt)[1])
+        self.assertFalse(
+            orientation(body.find(f"{{{W}}}sectPr"))[1], "the last section is portrait"
+        )
 
     def test_template_numbers_the_reference_pages_as_appendices(self):
         """АРКС400 and the company page are appendices 9 and 10, numbered by field."""

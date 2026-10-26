@@ -2,6 +2,9 @@ __pycache__/
 *.py[cod]
 /Технико-коммерческое предложение.docx
 
+# Local virtual environment
+.venv/
+
 # Linter cache
 .ruff_cache/
 
