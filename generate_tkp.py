@@ -50,6 +50,9 @@ SPEC_HEADERS = (
     "Кол-во",
 )
 
+# The proposal is set in 12 pt throughout, the specification table included.
+SPEC_FONT_SIZE = Pt(12)
+
 # Excel error literals. These are blanked out wherever they appear; any other
 # value starting with "#" (a legitimate article such as "#A-100") is kept.
 EXCEL_ERRORS = frozenset(
@@ -122,6 +125,21 @@ def format_qty(qty: float) -> str:
     if abs(qty - round(qty)) < 1e-9:
         return str(round(qty))
     return f"{qty:.10f}".rstrip("0").rstrip(".")
+
+
+def format_number(number: object) -> str:
+    """Normalise the proposal number shown on the first page and in the head.
+
+    The running header reads «Технико-коммерческое предложение № …» and repeats
+    the «Номер» row of the first page, so the sign is added here instead of
+    having to be typed into the sheet.
+    """
+    text = clean_text(number)
+    if not text:
+        return ""
+    if text.startswith("№"):
+        text = text[1:].strip()
+    return f"№ {text}" if text else "№"
 
 
 def _find_sheet(wb: Workbook, *names: str) -> Worksheet | None:
@@ -535,7 +553,7 @@ def _style_cell(
     run = p.add_run(text)
     run.bold = bold
     run.font.name = "Arial"
-    run.font.size = Pt(10)
+    run.font.size = SPEC_FONT_SIZE
     run.font.color.rgb = text_color
 
 
@@ -824,7 +842,8 @@ def generate_tkp(
 
     doc = open_word_template(template_path)
     doc_el = doc.element
-    set_bookmark_text(doc_el, "Num", data.metadata.number)
+    number = format_number(data.metadata.number)
+    set_bookmark_text(doc_el, "Num", number)
     set_bookmark_text(doc_el, "Customer", data.metadata.customer)
     set_bookmark_text(doc_el, "Object", data.metadata.object_name)
     if data.metadata.subject:
@@ -833,7 +852,7 @@ def generate_tkp(
     for section in doc.sections:
         for hdr in (section.header, section.first_page_header, section.even_page_header):
             if hdr is not None:
-                set_bookmark_text(hdr._element, "HeaderNum", data.metadata.number)
+                set_bookmark_text(hdr._element, "HeaderNum", number)
 
     populate_spec_table(doc, data.sections)
     out = Path(output_path)
