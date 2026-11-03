@@ -1115,10 +1115,11 @@ class TKPTest(unittest.TestCase):
         """
         self.assertEqual(format_qty(1), "1")
         self.assertEqual(format_qty(50), "50")
-        self.assertEqual(format_qty(2.5), "2.5")
-        self.assertEqual(format_qty(0.3), "0.3")
-        self.assertEqual(format_qty(1234567.5), "1234567.5")
-        self.assertEqual(format_qty(10000000.5), "10000000.5")
+        self.assertEqual(format_qty(2.5), "2,5")
+        self.assertEqual(format_qty(0.3), "0,3")
+        self.assertEqual(format_qty(1 / 3), "0,333333")
+        self.assertEqual(format_qty(1234567.5), "1234567,5")
+        self.assertEqual(format_qty(10000000.5), "10000000,5")
         for value in (2.5, 1 / 3, 1234567.5, 10000000.5, 0.1 + 0.2):
             self.assertNotIn("e", format_qty(value).lower())
 
