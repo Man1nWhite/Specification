@@ -1,0 +1,15 @@
+# The pins in requirements.txt and requirements-dev.txt are exact, so a new
+# release is never picked up silently: Dependabot opens the pull request that
+# moves the pin, and the audit job above says whether the move is safe.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
