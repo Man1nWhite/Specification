@@ -21,8 +21,3 @@ ignore = [
     "RUF002",
     "RUF003",
 ]
-
-[lint.per-file-ignores]
-# The tests deliberately exercise private helpers (_eval_cell) and compare the
-# two engines, so their assertions are intentionally fine-grained.
-"tests/*" = ["PT009", "PT018", "PT027"]

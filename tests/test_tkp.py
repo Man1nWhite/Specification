@@ -1,8 +1,10 @@
 """Static packaging checks, headless VBA preview test, and Python generator tests."""
 
+import io
 import re
 import shutil
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile
@@ -15,13 +17,19 @@ from pyopenvba import ExcelFile
 from pyopenvba.apps.excel import ExcelApplication
 
 from generate_tkp import (
+    TemplateError,
+    WorkbookError,
     _eval_cell,
     build_preview_rows,
     clean_text,
+    demo_cells,
     find_default_template,
+    find_default_workbook,
     format_number,
     format_qty,
     generate_tkp,
+    main,
+    populate_demo_workbook,
     read_tkp_data,
 )
 from tools import sync_assets
@@ -47,6 +55,11 @@ def normalise_preview_rows(rows):
             qty = int(qty)
         normalised.append((num, description, article or "", unit, qty, marker))
     return normalised
+
+
+def header_parts(path: Path) -> list[str]:
+    with ZipFile(path) as archive:
+        return sorted(n for n in archive.namelist() if n.startswith("word/header"))
 
 
 def read_part(name: str):
@@ -950,7 +963,8 @@ class TKPTest(unittest.TestCase):
 
         source = (ROOT / "Module1.bas").read_text(encoding="utf-8")
         self.assertNotIn('"Тип"', source)
-        self.assertIn("For col = 1 To 5", source)  # Word receives visible A:E verbatim.
+        self.assertIn("For col = 1 To 4", source)  # Word receives visible A:D verbatim…
+        self.assertIn("ТекстКоличества(spec.Cells(r, 5).Value2)", source)  # …and E as text.
 
     def test_generation_groups_sums_skips_and_refreshes(self):
         app = ExcelApplication.open(WORKBOOK)
@@ -1031,34 +1045,41 @@ class TKPTest(unittest.TestCase):
         self.assertEqual(preview.value("A2"), None)
         self.assertEqual(preview.value("B13"), None)
 
-    def _run_both(self, edits, last_row=14):
-        """Apply `edits` to both engines and return their normalised preview rows.
+    def _run_both_cells(self, cells):
+        """Write the same cells into both engines; return (vba_rows, py_rows, py_data).
 
-        Each edit is (sheet, row, description, article, quantity) written into the
-        C/D/G columns. Neither engine writes to disk: pyopenvba interprets the VBA
-        in memory and openpyxl only mutates the loaded workbook.
+        Each cell is (sheet, address, value). Unlike the old fixed window this
+        reads the preview to its last row, so a dataset bigger than twelve rows
+        is compared in full. Neither engine writes to disk: pyopenvba interprets
+        the VBA in memory and openpyxl only mutates the loaded workbook.
         """
         app = ExcelApplication.open(WORKBOOK)
-        for sheet, row, description, article, qty in edits:
-            source = app.sheet(sheet)
-            source.set_value(f"C{row}", description)
-            source.set_value(f"D{row}", article)
-            source.set_value(f"G{row}", qty)
+        for sheet, ref, value in cells:
+            app.sheet(sheet).set_value(ref, value)
         app.run("ОбновитьСпецификациюТКП")
         preview = app.sheet("Спец_ТКП")
-        values = [
-            tuple(preview.value(f"{letter}{row}") for letter in "ABCDEF")
-            for row in range(2, last_row)
-        ]
-        vba_rows = normalise_preview_rows([v for v in values if v[1] is not None])
+        vba = []
+        for row in range(2, 500):
+            values = tuple(preview.value(f"{letter}{row}") for letter in "ABCDEF")
+            if values[0] is None:
+                break
+            vba.append(values)
 
         wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        for sheet, ref, value in cells:
+            wb[sheet][ref] = value
+        data = read_tkp_data(wb)
+        return (
+            normalise_preview_rows(vba),
+            normalise_preview_rows(build_preview_rows(data.sections)),
+            data,
+        )
+
+    def _run_both(self, edits):
+        cells = []
         for sheet, row, description, article, qty in edits:
-            ws = wb[sheet]
-            ws[f"C{row}"] = description
-            ws[f"D{row}"] = article
-            ws[f"G{row}"] = qty
-        py_rows = normalise_preview_rows(build_preview_rows(read_tkp_data(wb).sections))
+            cells += [(sheet, f"C{row}", description), (sheet, f"D{row}", article), (sheet, f"G{row}", qty)]
+        vba_rows, py_rows, _ = self._run_both_cells(cells)
         return vba_rows, py_rows
 
     def test_total_and_margin_rows_are_skipped_in_both_engines(self):
@@ -1107,18 +1128,186 @@ class TKPTest(unittest.TestCase):
         for error in ("#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NUM!"):
             self.assertEqual(clean_text(error), "")
 
+    # --- Fail loudly: a formula no engine can evaluate is an error, not a zero ---
+
+    def test_unresolved_quantity_formula_fails_loudly(self):
+        """A formula the generator cannot evaluate is never read as 0 (A1)."""
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        ws = wb["1"]
+        ws["C4"], ws["D4"], ws["G4"] = "Модуль ввода", "ART-1", "=2+3"
+        ws["C5"], ws["D5"], ws["G5"] = "Модуль вывода", "ART-2", 1
+        data = read_tkp_data(wb)
+        self.assertEqual(data.issues, ["1!G4: =2+3"])
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.docx"
+            with self.assertRaisesRegex(WorkbookError, "1!G4"):
+                generate_tkp(wb, output_path=out)
+            self.assertFalse(out.exists())
+
+    def test_formula_text_never_reaches_the_document(self):
+        """In-memory books have no cache: the formula source must not become a description (N4)."""
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        ws = wb["1"]
+        ws["C20"], ws["D20"], ws["G20"] = '=D20&" (комплект)"', "KIT-1", 1
+        data = read_tkp_data(wb)
+        self.assertEqual([i.description for s in data.sections for i in s.items], ["KIT-1"])
+        self.assertEqual(data.issues, ['1!C20: =D20&" (комплект)"'])
+
+    def test_zip_rollup_keeps_its_own_semantics(self):
+        """Only the exact ЗИП roll-up is emulated; any other SUMIF is reported (N13)."""
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        populate_demo_workbook(wb)
+        ws = wb["Spare parts"]
+        ws["D25"] = "UT-2.5"
+        ws["G25"] = (
+            "=ROUNDUP((SUMIF('1'!$D$3:$D$100,D25,'1'!$G$3:$G$100)"
+            "+SUMIF('2'!$D$3:$D$100,D25,'2'!$G$3:$G$100))/10,0)"
+        )
+        ws["D26"], ws["G26"] = "UT-2.5", "=SUMIF('1'!$D$3:$D$100,D26,'1'!$G$3:$G$100)"
+        data = read_tkp_data(wb)
+        spare = next(s for s in data.sections if s.title == "ЗИП")
+        quantities = {i.article: i.qty for i in spare.items}
+        # Cabinet 2 holds 50 of UT-2.5: one spare per ten, so five.
+        self.assertEqual(quantities.get("UT-2.5"), 5)
+        self.assertEqual(data.issues, ["Spare parts!G26: =SUMIF('1'!$D$3:$D$100,D26,'1'!$G$3:$G$100)"])
+
+    def test_cli_refuses_an_empty_workbook_unless_demo_is_asked_for(self):
+        """A2: the macro refuses; the CLI does too, and --demo says so."""
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.docx"
+            err = io.StringIO()
+            with redirect_stderr(err), redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["-e", str(WORKBOOK), "-o", str(out)]), 2)
+            self.assertFalse(out.exists())
+            self.assertIn("Нет позиций с количеством больше нуля", err.getvalue())
+
+            err = io.StringIO()
+            with redirect_stderr(err), redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["-e", str(WORKBOOK), "-o", str(out), "--demo"]), 0)
+            self.assertTrue(out.exists())
+            self.assertIn("демонстрационных данных", err.getvalue())
+
+    def test_missing_bookmark_stops_generation(self):
+        """A3: no document with placeholders and a table at the end."""
+        with TemporaryDirectory() as tmp:
+            broken = Path(tmp) / "broken.dotx"
+            with ZipFile(TEMPLATE) as src, ZipFile(broken, "w") as dst:
+                for info in src.infolist():
+                    data = src.read(info.filename)
+                    if info.filename == "word/document.xml":
+                        root = etree.fromstring(data)
+                        for el in root.xpath(".//w:bookmarkStart[@w:name='Customer']", namespaces=NS):
+                            el.getparent().remove(el)
+                        data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                    dst.writestr(info, data)
+            out = Path(tmp) / "out.docx"
+            with self.assertRaisesRegex(TemplateError, "Customer"):
+                generate_tkp(WORKBOOK, template_path=broken, output_path=out, use_demo_if_empty=True)
+            self.assertFalse(out.exists())
+
+    def test_default_workbook_is_the_macro_book(self):
+        """N9: a stale .xlsx export next to the macro book must not win."""
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "Gen_TKP.xlsx").touch()
+            (base / "Gen_TKP.xlsm").touch()
+            self.assertEqual(find_default_workbook(base), base / "Gen_TKP.xlsm")
+            (base / "Gen_TKP.xlsm").unlink()
+            self.assertEqual(find_default_workbook(base), base / "Gen_TKP.xlsx")
+
+    # --- One algorithm: both engines read a sheet the same way ---
+
+    def test_demo_dataset_is_identical_in_both_engines(self):
+        """B11: the whole demo dataset, not three hand-picked cells."""
+        cells = [cell for cell in demo_cells() if cell[0] != "Наценки-Скидки"]
+        vba_rows, py_rows, data = self._run_both_cells(cells)
+        self.assertEqual(data.issues, [])
+        self.assertEqual(sum(1 for row in py_rows if row[5] == "I"), 16)
+        self.assertEqual(vba_rows, py_rows)
+
+    def test_sections_follow_the_order_of_the_sheet(self):
+        """B1: captions physically swapped — both engines emit row order."""
+        vba_rows, py_rows, _ = self._run_both_cells(
+            [
+                ("1", "B1", "Спецификация оборудования 3-х поставщиков"),
+                ("1", "B18", "Спецификация оборудования НВТ"),
+                ("1", "C4", "Шкаф навесной"),
+                ("1", "D4", "AE-1"),
+                ("1", "G4", 1),
+                ("1", "C20", "Модуль ввода"),
+                ("1", "D20", "NV-2"),
+                ("1", "G20", 2),
+            ]
+        )
+        self.assertEqual(vba_rows, py_rows)
+        self.assertEqual(
+            [row[1] for row in py_rows if row[5] == "H"],
+            ["Шкафное оборудование ПТК (шкаф 1)", "Оборудование ПТК (шкаф 1)"],
+        )
+
+    def test_text_quantities_read_the_same_in_both_engines(self):
+        """A4/N10: text in G is read without the Windows locale, and "inf" is not a number.
+
+        «3,5» is the text that matters: Excel keeps it as text, and IsNumeric
+        then answers differently depending on the Windows locale (on en-US
+        «3,5» is thirty-five). «1_000», «inf» and «2,5,1» also stay text and
+        are not numbers in any locale — float(), which would take «inf»,
+        «1_000» and non-ASCII digits, is not used for that reason.
+        """
+        cells = []
+        texts = ("3,5", "3.5", " 4 ", "1_000", "inf", "2,5,1")
+        for row, qty in zip(range(20, 26), texts, strict=True):
+            cells += [("1", f"C{row}", f"Позиция {row}"), ("1", f"D{row}", f"ART-{row}"), ("1", f"G{row}", qty)]
+        vba_rows, py_rows, _ = self._run_both_cells(cells)
+        self.assertEqual(vba_rows, py_rows)
+        self.assertEqual([row[4] for row in py_rows if row[5] == "I"], [3.5, 3.5, 4])
+
+    def test_unknown_caption_stops_both_engines(self):
+        """B2: the spelling «поставшиков» already sits in Наценки-Скидки!H5/H8."""
+        cells = [
+            ("1", "B18", "Спецификация оборудования 3-х поставшиков"),
+            ("1", "C20", "Модуль ввода"),
+            ("1", "D20", "X-1"),
+            ("1", "G20", 2),
+        ]
+        app = ExcelApplication.open(WORKBOOK)
+        for sheet, ref, value in cells:
+            app.sheet(sheet).set_value(ref, value)
+        app.run("ОбновитьСпецификациюТКП")
+        self.assertIsNone(app.sheet("Спец_ТКП").value("A2"))
+
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        for sheet, ref, value in cells:
+            wb[sheet][ref] = value
+        with self.assertRaisesRegex(WorkbookError, "поставшиков"):
+            read_tkp_data(wb)
+
+    def test_quantities_print_with_a_decimal_comma(self):
+        """A4: asserted on the Word text, not on the preview."""
+        wb = openpyxl.load_workbook(WORKBOOK, data_only=False)
+        populate_demo_workbook(wb)
+        wb["1"]["G4"] = 2.5
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.docx"
+            generate_tkp(wb, output_path=out)
+            table = docx.Document(str(out)).tables[2]
+        row = next(r for r in table.rows if r.cells[2].text.strip() == "АРКС400-ДВ-32")
+        self.assertEqual(row.cells[4].text.strip(), "2,5")
+
     def test_format_qty_is_always_plain_decimal(self):
         """Quantities must never reach the document in scientific notation.
 
         Regression (M1): %g renders 1234567.5 as "1.23457e+06" and truncates to
-        six significant digits.
+        six significant digits. The document is Russian, so the separator is a
+        comma — the same text Module1.ТекстКоличества puts in the Word table.
         """
         self.assertEqual(format_qty(1), "1")
         self.assertEqual(format_qty(50), "50")
-        self.assertEqual(format_qty(2.5), "2.5")
-        self.assertEqual(format_qty(0.3), "0.3")
-        self.assertEqual(format_qty(1234567.5), "1234567.5")
-        self.assertEqual(format_qty(10000000.5), "10000000.5")
+        self.assertEqual(format_qty(2.5), "2,5")
+        self.assertEqual(format_qty(0.3), "0,3")
+        self.assertEqual(format_qty(1234567.5), "1234567,5")
+        self.assertEqual(format_qty(10000000.5), "10000000,5")
+        self.assertEqual(format_qty(1 / 3), "0,333333")
         for value in (2.5, 1 / 3, 1234567.5, 10000000.5, 0.1 + 0.2):
             self.assertNotIn("e", format_qty(value).lower())
 
@@ -1191,6 +1380,42 @@ class TKPTest(unittest.TestCase):
             self.assertEqual(
                 list(doc.sections[0].header._element.iter(f"{{{W}}}instrText")), []
             )
+
+    def test_generation_adds_no_header_parts(self):
+        """B4: the generated document has exactly the template's headers.
+
+        python-docx creates a header part on first access, so reading
+        `even_page_header` added an empty header3.xml to every proposal.
+        """
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.docx"
+            generate_tkp(WORKBOOK, output_path=out, use_demo_if_empty=True)
+            self.assertEqual(header_parts(out), header_parts(TEMPLATE))
+
+    def test_generation_keeps_the_template_grid_inside_the_text_area(self):
+        """N17: the five grid columns add up to the portrait text width, not past it."""
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.docx"
+            generate_tkp(WORKBOOK, output_path=out, use_demo_if_empty=True)
+            document = etree.fromstring(ZipFile(out).read("word/document.xml"))
+        table = next(
+            t
+            for t in document.iter(f"{{{W}}}tbl")
+            if "Наименование и техническая характеристика" in "".join(t.itertext())
+        )
+        grid = [int(col.get(f"{{{W}}}w")) for col in table.find(f"{{{W}}}tblGrid")]
+        self.assertEqual(sum(grid), 9780)
+
+    def test_assets_carry_no_personal_metadata(self):
+        """B8: the name of whoever last saved the file is not published."""
+        dc = "{http://purl.org/dc/elements/1.1/}"
+        cp = "{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}"
+        for asset in (TEMPLATE, WORKBOOK):
+            with ZipFile(asset) as archive:
+                core = etree.fromstring(archive.read("docProps/core.xml"))
+            for tag in (f"{dc}creator", f"{cp}lastModifiedBy"):
+                element = core.find(tag)
+                self.assertTrue(element is None or not (element.text or "").strip(), f"{asset.name}: {tag}")
 
 
 if __name__ == "__main__":

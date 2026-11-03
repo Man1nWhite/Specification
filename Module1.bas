@@ -23,6 +23,7 @@ Public Sub СформироватьТКП()
     Dim r As Long, col As Long
     Dim isGroup As Boolean
     Dim number As String, subjectText As String, headers As Variant, errorText As String
+    Dim widths As Variant
 
     On Error GoTo Failed
 
@@ -81,9 +82,10 @@ Public Sub СформироватьТКП()
 
     For r = 2 To lastRow
         isGroup = (ЧистыйТекст(spec.Cells(r, "F").Value2) = "H")
-        For col = 1 To 5
+        For col = 1 To 4
             tbl.Cell(r + 1, col).Range.Text = ЧистыйТекст(spec.Cells(r, col).Value2)
         Next col
+        tbl.Cell(r + 1, 5).Range.Text = ТекстКоличества(spec.Cells(r, 5).Value2)
         tbl.Cell(r + 1, 1).Range.ParagraphFormat.Alignment = 1 ' wdAlignParagraphCenter
         tbl.Cell(r + 1, 4).Range.ParagraphFormat.Alignment = 1
         tbl.Cell(r + 1, 5).Range.ParagraphFormat.Alignment = 1
@@ -110,7 +112,18 @@ Public Sub СформироватьТКП()
     tbl.Rows(2).Shading.BackgroundPatternColor = RGB(192, 0, 0) ' #C00000
     tbl.Rows(1).Range.ParagraphFormat.Alignment = 1 ' wdAlignParagraphCenter
     tbl.Rows(2).Range.ParagraphFormat.Alignment = 1 ' wdAlignParagraphCenter
-    tbl.AutoFitBehavior 2 ' wdAutoFitWindow: fit the five columns to the page.
+
+    ' The column proportions of generate_tkp.populate_spec_table. AutoFitBehavior
+    ' wdAutoFitWindow, used before, only stretched the five equal columns that
+    ' Tables.Add creates, so the two engines laid the table out differently.
+    widths = Array(7.18, 54.78, 20.18, 10.1, 7.76)
+    tbl.AllowAutoFit = False
+    tbl.PreferredWidthType = 2 ' wdPreferredWidthPercent
+    tbl.PreferredWidth = 100
+    For col = 1 To 5
+        tbl.Columns(col).PreferredWidthType = 2
+        tbl.Columns(col).PreferredWidth = widths(col - 1)
+    Next col
     Exit Sub
 
 Failed:
@@ -197,10 +210,9 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
     Dim hasCaptions As Boolean
     Dim caption As String, sectionTitle As String
     Dim description As String, article As String, unit As String
-    Dim rawQty As Variant, qty As Double
+    Dim qty As Double
 
-    lastRow = src.Cells(src.Rows.Count, "B").End(xlUp).Row
-    If lastRow < 48 Then lastRow = 48
+    lastRow = ПоследняяСтрока(src)
 
     currentBlock = 0
     prevBlock = 0
@@ -214,6 +226,11 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
 
         If StrComp(Left$(caption, Len("Спецификация ")), "Спецификация ", vbTextCompare) = 0 Then
             currentBlock = НомерБлока(caption)
+            If currentBlock = 0 Then
+                Err.Raise vbObjectError + 1002, "ОбработатьЛист", _
+                          "Лист '" & src.Name & "', строка " & CStr(r) & ": неизвестный раздел «" & _
+                          caption & "». Ожидается «НВТ», «Эксара»/«ИнСАТ» или «3-х поставщиков»."
+            End If
             hasCaptions = True
             If cabNo > 0 Then itemNo = 0
         ElseIf ЭтоСлужебнаяСтрока(caption, description) Then
@@ -231,53 +248,29 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
             End If
 
             If effBlock > 0 Then
-                rawQty = src.Cells(r, "G").Value2
-                If Not IsError(rawQty) Then
-                    If IsNumeric(rawQty) And Not IsEmpty(rawQty) Then
-                        qty = CDbl(rawQty)
-                        If qty > 0 Then
-                            description = ЧистыйТекст(src.Cells(r, "C").Value2)
-                            article = ЧистыйТекст(src.Cells(r, "D").Value2)
-                            unit = ЧистыйТекст(src.Cells(r, "F").Value2)
+                If ЧислоКоличества(src.Cells(r, "G").Value2, qty) Then
+                    If qty > 0 Then
+                        article = ЧистыйТекст(src.Cells(r, "D").Value2)
+                        unit = ЧистыйТекст(src.Cells(r, "F").Value2)
+                        ' Some NVT descriptions still have broken #REF! price-list lookups.
+                        ' ЧистыйТекст already blanks Excel errors, so only an empty
+                        ' description or a literal "0" needs the article fallback.
+                        If Len(description) = 0 Or description = "0" Then description = article
+                        If Len(unit) = 0 Then unit = "шт."
 
-                            ' Some NVT descriptions still have broken #REF! price-list lookups.
-                            ' ЧистыйТекст already blanks Excel error literals, so only an
-                            ' empty description or a literal "0" needs the article fallback.
-                            If Len(description) = 0 Or description = "0" Then
-                                description = article
-                            End If
-                            If Len(unit) = 0 Then unit = "шт."
-
-                            If Len(description) > 0 Then
-                                If itemNo = 0 Then
-                                    If cabNo > 0 Then
-                                        sectionTitle = ЗаголовокБлокаШкафа(cabNo, effBlock)
-                                    Else
-                                        sectionTitle = fixedTitle
-                                    End If
-                                    headingNo = headingNo + 1
-                                    dst.Cells(outRow, "A").NumberFormat = "@"
-                                    dst.Cells(outRow, "A").Value2 = CStr(headingNo) & "."
-                                    dst.Cells(outRow, "B").Value2 = sectionTitle
-                                    dst.Cells(outRow, "C").Value2 = ""
-                                    dst.Cells(outRow, "D").Value2 = "Компл."
-                                    dst.Cells(outRow, "E").Value2 = 1
-                                    dst.Cells(outRow, "F").Value2 = "H"
-                                    dst.Range("A" & outRow & ":E" & outRow).Font.Bold = True
-                                    outRow = outRow + 1
+                        If Len(description) > 0 Then
+                            If itemNo = 0 Then
+                                If cabNo > 0 Then
+                                    sectionTitle = ЗаголовокБлокаШкафа(cabNo, effBlock)
+                                Else
+                                    sectionTitle = fixedTitle
                                 End If
-
-                                itemNo = itemNo + 1
-                                sheetItems = sheetItems + 1
-                                dst.Cells(outRow, "A").NumberFormat = "@"
-                                dst.Cells(outRow, "A").Value2 = CStr(itemNo) & "."
-                                dst.Cells(outRow, "B").Value2 = description
-                                dst.Cells(outRow, "C").Value2 = article
-                                dst.Cells(outRow, "D").Value2 = unit
-                                dst.Cells(outRow, "E").Value2 = qty
-                                dst.Cells(outRow, "F").Value2 = "I"
-                                outRow = outRow + 1
+                                headingNo = headingNo + 1
+                                ЗаписатьСтроку dst, outRow, CStr(headingNo) & ".", sectionTitle, "", "Компл.", 1, "H"
                             End If
+                            itemNo = itemNo + 1
+                            sheetItems = sheetItems + 1
+                            ЗаписатьСтроку dst, outRow, CStr(itemNo) & ".", description, article, unit, qty, "I"
                         End If
                     End If
                 End If
@@ -286,6 +279,101 @@ Private Function ОбработатьЛист(ByVal src As Worksheet, ByVal cabN
     Next r
 
     ОбработатьЛист = sheetItems
+End Function
+
+Private Sub ЗаписатьСтроку(ByVal dst As Worksheet, ByRef outRow As Long, ByVal num As String, _
+                           ByVal description As String, ByVal article As String, _
+                           ByVal unit As String, ByVal qty As Double, ByVal marker As String)
+    ' A:D are set to text before they are filled: in a General cell "0441504"
+    ' would lose its zero, "1-2" would become a date and "=..." a formula — and
+    ' Word receives what the cell then shows.
+    Dim col As Long
+    For col = 1 To 4
+        dst.Cells(outRow, col).NumberFormat = "@"
+    Next col
+    dst.Cells(outRow, "A").Value2 = num
+    dst.Cells(outRow, "B").Value2 = description
+    dst.Cells(outRow, "C").Value2 = article
+    dst.Cells(outRow, "D").Value2 = unit
+    dst.Cells(outRow, "E").Value2 = qty
+    dst.Cells(outRow, "F").Value2 = marker
+    If marker = "H" Then dst.Range("A" & outRow & ":E" & outRow).Font.Bold = True
+    outRow = outRow + 1
+End Sub
+
+Private Function ПоследняяСтрока(ByVal src As Worksheet) As Long
+    ' The layout ends at row 48, but positions may be added below it: scan to the
+    ' lowest filled cell of every column the specification reads (as Python does).
+    Dim r As Long
+    ПоследняяСтрока = 48
+    r = ПоследняяСтрокаКолонки(src, "B")
+    If r > ПоследняяСтрока Then ПоследняяСтрока = r
+    r = ПоследняяСтрокаКолонки(src, "C")
+    If r > ПоследняяСтрока Then ПоследняяСтрока = r
+    r = ПоследняяСтрокаКолонки(src, "D")
+    If r > ПоследняяСтрока Then ПоследняяСтрока = r
+    r = ПоследняяСтрокаКолонки(src, "G")
+    If r > ПоследняяСтрока Then ПоследняяСтрока = r
+End Function
+
+Private Function ПоследняяСтрокаКолонки(ByVal src As Worksheet, ByVal col As String) As Long
+    ПоследняяСтрокаКолонки = src.Cells(src.Rows.Count, col).End(xlUp).Row
+End Function
+
+Private Function ЧислоКоличества(ByVal value As Variant, ByRef qty As Double) As Boolean
+    ' Column G is read the same way on every Windows locale and the same way as
+    ' generate_tkp._parse_numeric_qty: a number cell as it is, text only as plain
+    ' decimal notation with "." or ",". IsNumeric/CDbl follow the locale — on
+    ' en-US "3,5" reads as 35, on ru-RU "3.5" is not a number.
+    Dim s As String, ch As String, i As Long, digit As Long, digits As Long
+    Dim mantissa As Double, divisor As Double
+    Dim inFraction As Boolean, negative As Boolean
+
+    If IsError(value) Or IsEmpty(value) Or IsNull(value) Then Exit Function
+    Select Case VarType(value)
+        Case vbDouble, vbSingle, vbInteger, vbLong, vbCurrency, vbByte, vbDecimal
+            qty = CDbl(value)
+            ЧислоКоличества = True
+        Case vbString
+            s = Trim$(value)
+            divisor = 1
+            For i = 1 To Len(s)
+                ch = Mid$(s, i, 1)
+                digit = InStr(1, "0123456789", ch) - 1
+                If digit >= 0 Then
+                    ' One integer divided once: the correctly rounded value that
+                    ' Python's float() returns for the same text.
+                    mantissa = mantissa * 10 + digit
+                    digits = digits + 1
+                    If inFraction Then divisor = divisor * 10
+                ElseIf (ch = "." Or ch = ",") And Not inFraction Then
+                    inFraction = True
+                ElseIf i = 1 And (ch = "+" Or ch = "-") Then
+                    negative = (ch = "-")
+                Else
+                    Exit Function
+                End If
+            Next i
+            If digits = 0 Then Exit Function
+            qty = mantissa / divisor
+            If negative Then qty = -qty
+            ЧислоКоличества = True
+    End Select
+End Function
+
+Private Function ТекстКоличества(ByVal value As Variant) As String
+    ' Decimal comma, at most six decimals, whatever the locale — the same text as
+    ' generate_tkp.format_qty. Str$ ignores the locale ("." and no grouping),
+    ' unlike CStr and Format$, but drops the leading zero of ".5".
+    Dim s As String
+    Select Case VarType(value)
+        Case vbDouble, vbSingle, vbInteger, vbLong, vbCurrency, vbByte, vbDecimal
+            s = Trim$(Str$(Round(CDbl(value), 6)))
+            If Left$(s, 1) = "." Then s = "0" & s
+            ТекстКоличества = Replace(s, ".", ",")
+        Case Else
+            ТекстКоличества = ЧистыйТекст(value)
+    End Select
 End Function
 
 Private Function ЗаголовокБлокаШкафа(ByVal cabNo As Long, ByVal blockNo As Long) As String
