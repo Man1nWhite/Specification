@@ -32,6 +32,7 @@ X_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 DC_NS = "http://purl.org/dc/elements/1.1/"
+CP_NS = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 EP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 VT_NS = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 W = f"{{{W_NS}}}"
@@ -1665,6 +1666,38 @@ def apply_font_policy(
         raise_text_sizes(defaults)
 
 
+def clear_personal_metadata(path: Path) -> None:
+    """Empty the author fields of an Office file, and name its template honestly.
+
+    «ABagdasaryan» in docProps is a person's account name: it travels with every
+    proposal built from the template and with the generator workbook itself. A
+    document has no business publishing who saved it last, so the sync step
+    empties the fields instead of asking everybody to remember.
+    """
+    with ZipFile(path) as archive:
+        if "docProps/core.xml" not in archive.namelist():
+            return
+        core = etree.fromstring(archive.read("docProps/core.xml"))
+        parts: dict[str, bytes] = {}
+        changed = False
+        for tag in (f"{{{DC_NS}}}creator", f"{{{CP_NS}}}lastModifiedBy"):
+            element = core.find(tag)
+            if element is not None and (element.text or "").strip():
+                element.text = ""
+                changed = True
+        if changed:
+            parts["docProps/core.xml"] = write_xml(core)
+
+        if "docProps/app.xml" in archive.namelist() and path == TEMPLATE_DOTX:
+            app = etree.fromstring(archive.read("docProps/app.xml"))
+            template = app.find(f"{{{EP_NS}}}Template")
+            if template is not None and template.text != TEMPLATE_DOTX.name:
+                template.text = TEMPLATE_DOTX.name
+                parts["docProps/app.xml"] = write_xml(app)
+    if parts:
+        replace_zip_part(path, parts)
+
+
 def _set_document_title(parts: dict[str, bytes]) -> None:
     """Give the template the «ТКП» title property.
 
@@ -1872,4 +1905,6 @@ if __name__ == "__main__":
     patch_template()
     patch_preview_sheet()
     embed_macro()
+    clear_personal_metadata(TEMPLATE_DOTX)
+    clear_personal_metadata(WORKBOOK)
     print("Updated the .dotx template, Excel preview sheet, and embedded VBA macro.")
