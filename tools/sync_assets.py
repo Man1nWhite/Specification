@@ -32,6 +32,7 @@ X_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 DC_NS = "http://purl.org/dc/elements/1.1/"
+CP_NS = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 EP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 VT_NS = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 W = f"{{{W_NS}}}"
@@ -1665,6 +1666,27 @@ def apply_font_policy(
         raise_text_sizes(defaults)
 
 
+def _clear_author_metadata(core_xml: bytes) -> bytes:
+    """Remove personal author fields without changing unrelated properties."""
+    core = etree.fromstring(core_xml)
+    changed = False
+    for tag in (f"{{{DC_NS}}}creator", f"{{{CP_NS}}}lastModifiedBy"):
+        for element in core.findall(tag):
+            if element.text:
+                element.text = None
+                changed = True
+    return write_xml(core) if changed else core_xml
+
+
+def sanitize_workbook_metadata() -> None:
+    """Clean author fields after embedding; leave other workbook parts intact."""
+    with ZipFile(WORKBOOK) as archive:
+        core = archive.read("docProps/core.xml")
+    clean = _clear_author_metadata(core)
+    if clean != core:
+        replace_zip_part(WORKBOOK, {"docProps/core.xml": clean})
+
+
 def _set_document_title(parts: dict[str, bytes]) -> None:
     """Give the template the «ТКП» title property.
 
@@ -1754,6 +1776,12 @@ def patch_template() -> None:
         "docProps/app.xml": app,
     }
     _set_document_title(parts)
+    parts["docProps/core.xml"] = _clear_author_metadata(parts["docProps/core.xml"])
+    app_root = etree.fromstring(parts["docProps/app.xml"])
+    template_property = app_root.find(f"{{{EP_NS}}}Template")
+    if template_property is not None and template_property.text != TEMPLATE_DOTX.name:
+        template_property.text = TEMPLATE_DOTX.name
+        parts["docProps/app.xml"] = write_xml(app_root)
 
     replace_zip_part(
         TEMPLATE_DOTX,
@@ -1803,6 +1831,20 @@ def patch_preview_sheet() -> None:
     data = root.find(X + "sheetData")
     dimension = root.find(X + "dimension")
     assert data is not None and dimension is not None
+
+    # The normal A1:G3 dimension also covers two possible preview rows. Refuse
+    # to package real data even if the worksheet dimension has not grown.
+    for row in data.findall(X + "row"):
+        if int(row.get("r", "0")) < 2:
+            continue
+        for cell in row.findall(X + "c"):
+            address = cell.get("r", "")
+            if address and address[0] in "ABCDEF" and not address[1:2].isalpha():
+                value = cell.find(X + "v")
+                inline = cell.find(X + "is")
+                if (cell.find(X + "f") is not None or (value is not None and value.text is not None)
+                        or (inline is not None and "".join(inline.itertext()))):
+                    raise ValueError("The preview sheet is not empty; clear A2:F before synchronizing")
 
     if dimension.get("ref") == "A1:G3":
         header = root.xpath(".//x:c[@r='A1']", namespaces={"x": X_NS})
@@ -1872,4 +1914,5 @@ if __name__ == "__main__":
     patch_template()
     patch_preview_sheet()
     embed_macro()
+    sanitize_workbook_metadata()
     print("Updated the .dotx template, Excel preview sheet, and embedded VBA macro.")
