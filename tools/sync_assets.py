@@ -157,6 +157,58 @@ PAYMENTS = (
     (PAYMENT_TRAINING_ANCHOR, PAYMENT_TRAINING),
 )
 
+# Guarantee, the status of the document and the confidentiality clause: the
+# offered wording with which the review closed. The guarantee counts from «с
+# даты ввода в эксплуатацию», capped by «но не более 30 месяцев с даты
+# поставки» — the отсчёт from «даты перехода права собственности» a customer
+# keeps rejecting; the status clause says the document is not a public offer
+# (ст. 435 ГК РФ) instead of calling itself an «официальное» предложение with
+# a price and a validity period; the confidentiality clause exempts the
+# customer's own tender procedures from the non-disclosure rule, which the old
+# wording locked out. An earlier revision shipped the old wordings, so the
+# paragraph is located by its opening words and rewritten when it differs.
+WARRANTY_ANCHOR = "Гарантия на оборудование"
+WARRANTY = (
+    "Гарантия на оборудование АРКС400 — 24 месяца, на остальное оборудование — "
+    "12 месяцев, исчисляемые с даты ввода в эксплуатацию, но не более 30 месяцев "
+    "с даты поставки."
+)
+STATUS_DOCUMENT_ANCHOR = "Настоящий документ"
+STATUS_DOCUMENT = (
+    "Настоящий документ не является публичной офертой; окончательные условия "
+    "определяются Договором."
+)
+CONFIDENTIALITY_ANCHOR = "Информация, содержащаяся"
+CONFIDENTIALITY = (
+    "Информация, содержащаяся в настоящем документе, представляет собой "
+    "коммерческую тайну Исполнителя и является конфиденциальной для третьих лиц. "
+    "Никакая часть настоящего документа не может быть скопирована, воспроизведена "
+    "или передана в каком-либо виде третьим лицам без письменного разрешения "
+    "Исполнителя, за исключением случаев, предусмотренных закупочными процедурами "
+    "Заказчика."
+)
+REVIEWED_WORDINGS = (
+    (WARRANTY_ANCHOR, WARRANTY),
+    (STATUS_DOCUMENT_ANCHOR, STATUS_DOCUMENT),
+    (CONFIDENTIALITY_ANCHOR, CONFIDENTIALITY),
+)
+
+# Renames applied to whole paragraphs anywhere in the document, tables included.
+# The parameters table, the table of stages in Appendix 8 and the chart now name
+# a stage exactly the same; an earlier revision mixed the names, so a template
+# of that revision is brought forward by renaming the exact paragraph. Matching
+# the whole paragraph keeps prose like «Разработка РКД в части ПТК АСУ ТП.Этап
+# завершается …» untouched, and the old Gantt rows are replaced wholesale by
+# the rebuilt chart anyway.
+STAGE_RENAMES = (
+    ("Наладка ПТК и комплексная наладка системы", "Пусконаладочные работы"),
+    ("Разработка РКД", "Разработка РКД в части ПТК АСУ ТП"),
+    ("Разработка конструкторской документации.", "Разработка РКД в части ПТК АСУ ТП."),
+    ("Доставка", "Доставка оборудования"),
+    ("Монтаж оборудования", "Монтажные работы."),
+    ("Обучение", "Обучение персонала"),
+)
+
 # Openings that are re-worded in place, so the rest of the paragraph (and its
 # runs, which carry non-breaking spaces around the certificate numbers) survives.
 REWORDINGS = (
@@ -198,12 +250,12 @@ MOUNTING_EXTRA_WORKS = (
 SITE_READINESS_INTRO = "К началу монтажных работ Заказчик обеспечивает:"
 SITE_READINESS = (
     "основания и фальшпол: выполненные основания (цоколи) под шкафы по чертежам "
-    "общего вида, фальшпол с необходимой несущей способностью и кабельными каналами, "
-    "разметка мест установки.",
+    "общего вида, [фальшпол с необходимой несущей способностью и кабельными "
+    "каналами], разметка мест установки.",
     "контур заземления: смонтированный контур защитного и рабочего (информационного) "
     "заземления с сопротивлением не более 4 Ом, главная заземляющая шина в помещении.",
-    "электропитание: подведённые сети ~220 В (1ф) и ~380 В (3ф) частотой 50 Гц с "
-    "запасом по мощности не менее 5 кВт на шкаф, отдельные аппараты защиты.",
+    "электропитание: подведённые сети ~220 В (1ф) и [~380 В (3ф)] частотой 50 Гц с "
+    "запасом по мощности не менее [5] кВт на шкаф, отдельные аппараты защиты.",
     "освещение: рабочее и аварийное освещение не менее 300 лк в зоне монтажа, "
     "розетки ~220 В для подключения инструмента.",
     "пропускной режим: оформленные пропуска для персонала и транспорта, допуск к "
@@ -227,67 +279,129 @@ MOUNTING_NOTE = (
     "перекрытия, огнезащита кабельных линий и конструкций, демонтаж существующего "
     "оборудования и кабельных линий, общестроительные и отделочные работы на объекте."
 )
+# The mounting and the commissioning appendices state how the travel expenses of
+# the contractor's crew are covered. The allocation is negotiated per project, so
+# it is a template parameter like the bracketed values above, not a fixed claim:
+# the sender keeps one of the two wordings and deletes the other.
+TRAVEL_NOTE_MOUNTING = (
+    "Командировочные расходы: [оплату командировочных расходов специалистов "
+    "Исполнителя к месту выполнения монтажных работ и обратно (проезд, проживание, "
+    "суточные) осуществляет Заказчик / командировочные расходы включены в стоимость "
+    "монтажных работ]."
+)
+TRAVEL_NOTE_PNR = (
+    "Командировочные расходы: [оплату командировочных расходов специалистов "
+    "Исполнителя к месту выполнения пусконаладочных работ и обратно (проезд, "
+    "проживание, суточные) осуществляет Заказчик / командировочные расходы включены "
+    "в стоимость пусконаладочных работ]."
+)
+PNR_TABLE_ANCHOR = "Настройка контроллеров ПТК"
+# The legend that tells the sender what the bracketed, yellow values mean. It
+# stands after the mounting note, so the whole appendix reads top to bottom:
+# the works, what the customer prepares, what stays out, and how to fill the
+# template.
+PARAMS_LEGEND = (
+    "Параметры шаблона: текст в квадратных скобках, выделенный жёлтым цветом, "
+    "подставляется по проекту; неприменимые фрагменты удаляются перед направлением "
+    "предложения Заказчику."
+)
 
 DOCUMENTS_ANCHOR = "Кабельный журнал"
-DOCUMENTS_STAGE_NOTE = "Оформляется на этапе выполнения монтажных работ"
-# Appendix 4 lists the documents themselves, 1..22. A shaded group row that
-# titled the set «РКД и ЭД по ГОСТ 34» stood above them in the previous
-# revision; the review dropped it, because a title line in the table says the
-# same as the heading of the appendix and pushes the list down a row.
-LEGACY_GROUP_ROW = "РКД и ЭД по ГОСТ 34"
-RKD_DOCUMENTS = (
-    "Схема структурная комплекса технических средств автоматизации",
-    "Схемы соединений внешних проводок и таблицы соединений внешних проводок",
-    "Схемы принципиальные и схемы подключений",
-    "Чертежи общего вида шкафов",
-    "Ведомость покупных изделий",
-    "Программа и методика испытаний (ПМИ)",
-    "Протоколы заводских приёмо‑сдаточных испытаний (ЗПИ)",
-    "Протоколы приёмо‑сдаточных испытаний (ПСИ)",
-    "Описание прикладного программного обеспечения (ППО)",
-    "Руководство оператора",
-    "Руководство администратора",
-    "Инструкция по техническому обслуживанию",
-    "Формуляр (паспорт) на оборудование",
-    "Ведомость ЗИП",
+# Appendix 4 hands the documentation over in blocks: working documentation
+# (РКД), operational documentation (ЭД), executive documentation and protocols,
+# and acts. Each group row states the format (paper and electronic, PDF, drawings
+# as PDF + DWG), the number of copies and the standard (ЕСКД / ГОСТ 34), so the
+# table stands on its own without an introductory paragraph. The act of the
+# commissioning stage is not documentation: Appendix 8 tracks it with the stage
+# «Пусконаладочные работы», so it is not listed here.
+DOCUMENT_BLOCKS = (
+    (
+        "РКД — рабочая конструкторская документация (ЕСКД, ГОСТ 34.201): "
+        "2 экземпляра на бумажном носителе, 1 экземпляр в электронном виде "
+        "(PDF; графическая часть — PDF + DWG)",
+        (
+            "Схема структурная комплекса технических средств автоматизации",
+            "Схемы соединений внешних проводок и таблицы соединений внешних проводок",
+            "Схемы принципиальные и схемы подключений",
+            "Чертежи общего вида шкафов",
+            "Ведомость покупных изделий",
+            "Программа и методика испытаний (ПМИ)",
+            "Описание прикладного программного обеспечения (ППО)",
+        ),
+    ),
+    (
+        "ЭД — эксплуатационная документация (ГОСТ 34.201): "
+        "2 экземпляра на бумажном носителе, 1 экземпляр в электронном виде "
+        "(PDF; исходные файлы — по запросу)",
+        (
+            "Руководство оператора",
+            "Руководство администратора",
+            "Инструкция по техническому обслуживанию",
+            "Формуляр (паспорт) на оборудование",
+            "Ведомость ЗИП",
+            "Паспорта и сертификаты соответствия на покупное оборудование",
+        ),
+    ),
+    (
+        "Исполнительная документация и протоколы: "
+        "1 экземпляр на бумажном носителе, 1 экземпляр в электронном виде "
+        "(PDF; исполнительные схемы — PDF + DWG)",
+        (
+            "Протоколы заводских приёмо‑сдаточных испытаний (ЗПИ)",
+            "Протоколы приёмо‑сдаточных испытаний (ПСИ)",
+            "Протокол проверки наличия цепи между заземлителями и заземляемыми элементами",
+            "Протокол измерения сопротивления изоляции",
+            "Протокол проверки автоматических выключателей в электроустановках "
+            "напряжением до 1000 В",
+            "Кабельный журнал",
+            "Исполнительные схемы",
+        ),
+    ),
+    (
+        "Акты: 2 экземпляра на бумажном носителе",
+        ("Акты скрытых работ",),
+    ),
 )
-# Handed over with the equipment and after the commissioning, outside the
-# ГОСТ 34 group.
-HANDOVER_DOCUMENTS = (
-    "Паспорта и сертификаты соответствия на покупное оборудование",
-    "Акт выполненных пусконаладочных работ",
-)
-# General rows that repeated the specific items above.
-DUPLICATE_DOCUMENTS = frozenset(
+# Rows an earlier revision listed as documentation. The general rows repeated
+# the specific items; the act of the commissioning stage belongs to the calendar
+# plan; the trailing period after «1000 В» is gone with the rebuild.
+REMOVED_DOCUMENTS = frozenset(
     {
+        "Акт выполненных пусконаладочных работ",
         "Документация на ППО",
         "Эксплуатационная документация (руководство оператора, паспорта)",
     }
 )
 
+# Only the abbreviations the document actually uses: the review found ИМ, ПД,
+# СИ and ТО in the list with no use in the text, and found HMI (Appendix 6),
+# SIL (Appendix 9), УПД (payment terms, Appendix 8) and ГИСП (Appendix 9) used
+# without an entry. ЕСКД joined with the handover blocks of Appendix 4. Latin
+# abbreviations come first, then the Russian ones alphabetically.
 TERMS_TITLE = "Термины и сокращения"
 TERMS_INTRO = "В настоящем документе используются следующие термины и сокращения:"
 TERMS_COLUMNS = ("Сокращение", "Расшифровка")
 TERMS = (
-    ("ПТК", "программно-технический комплекс"),
-    ("ППО", "прикладное программное обеспечение"),
-    ("РКД", "рабочая конструкторская документация"),
-    ("УСО", "устройства связи с объектом"),
-    ("ЗПИ", "заводские приёмо‑сдаточные испытания"),
-    ("ПСИ", "приёмо‑сдаточные испытания на объекте"),
+    ("HMI", "человеко-машинный интерфейс (панель оператора)"),
+    ("SIL", "уровень полноты безопасности (Safety Integrity Level)"),
     ("АРМ", "автоматизированное рабочее место"),
-    ("КИИ", "критическая информационная инфраструктура"),
     ("АСУ ТП", "автоматизированная система управления технологическим процессом"),
+    ("ГИСП", "Государственная информационная система промышленности"),
+    ("ЕСКД", "единая система конструкторской документации"),
     ("ЗИП", "запасные части, инструменты и принадлежности"),
+    ("ЗПИ", "заводские приёмо‑сдаточные испытания"),
     ("ИБП", "источник бесперебойного питания"),
-    ("ИМ", "исполнительный механизм"),
+    ("КИИ", "критическая информационная инфраструктура"),
     ("ЛВС", "локальная вычислительная сеть"),
     ("НДС", "налог на добавленную стоимость"),
-    ("ПД", "проектная документация"),
     ("ПМИ", "программа и методика испытаний"),
     ("ПНР", "пусконаладочные работы"),
-    ("СИ", "средство измерений"),
-    ("ТО", "техническое обслуживание"),
+    ("ППО", "прикладное программное обеспечение"),
+    ("ПСИ", "приёмо‑сдаточные испытания на объекте"),
+    ("ПТК", "программно-технический комплекс"),
+    ("РКД", "рабочая конструкторская документация"),
+    ("УПД", "универсальный передаточный документ"),
+    ("УСО", "устройства связи с объектом"),
     ("ФСТЭК России", "Федеральная служба по техническому и экспортному контролю"),
     ("ЭД", "эксплуатационная документация"),
 )
@@ -307,8 +421,11 @@ LEGACY_GANTT_CAPTION = (
     "заключения Договора."
 )
 GANTT_ANCHOR = "20 (двадцать) недель с даты поступления авансового платежа"
+# Stage names match the parameters table and the table of stages word for word;
+# an earlier revision drew «Разработка РКД» in the chart against «Разработка РКД
+# в части ПТК АСУ ТП» in both tables.
 GANTT_STAGES = (
-    ("Разработка РКД", 1, 10),
+    ("Разработка РКД в части ПТК АСУ ТП", 1, 10),
     ("Разработка ППО", 1, 19),
     ("Заказ и сборка оборудования", 1, 20),
     ("Заводские приёмо‑сдаточные испытания", 21, 21),
@@ -422,6 +539,70 @@ def run(text: str, example: etree._Element | None = None) -> etree._Element:
         value.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
     value.text = text
     return result
+
+
+def split_parameters(text: str) -> list[tuple[str, bool]]:
+    """Split `text` into plain and yellow (parameter) segments.
+
+    The template marks the values a sender fills in per project with square
+    brackets, and the sync step colours them yellow so they cannot be missed:
+    «[~380 В (3ф)]» is a parameter, «~220 В» is not. Brackets nest nowhere, so a
+    single pass is enough; an unbalanced bracket fails the build instead of
+    shipping a half-marked document.
+    """
+    segments: list[tuple[str, bool]] = []
+    depth = 0
+    current = ""
+    for char in text:
+        if char == "[":
+            if depth:
+                raise ValueError(f"Nested template parameter in {text!r}")
+            if current:
+                segments.append((current, False))
+            current = char
+            depth += 1
+            continue
+        if char == "]":
+            if not depth:
+                raise ValueError(f"Unbalanced template parameter in {text!r}")
+            current += char
+            segments.append((current, True))
+            current = ""
+            depth -= 1
+            continue
+        current += char
+    if depth:
+        raise ValueError(f"Unbalanced template parameter in {text!r}")
+    if current:
+        segments.append((current, False))
+    return segments
+
+
+def parameter_run(text: str, example: etree._Element | None) -> etree._Element:
+    """A run for a {[...]} segment: the brackets stay, the segment is yellow."""
+    result = run(text, example)
+    properties = result.find(W + "rPr")
+    if properties is None:
+        properties = etree.Element(W + "rPr")
+        result.insert(0, properties)
+    if properties.find(W + "highlight") is None:
+        highlight = etree.Element(W + "highlight")
+        highlight.set(W + "val", "yellow")
+        insert_in_order(properties, highlight, RPR_ORDER)
+    return result
+
+
+def append_parameter_runs(
+    paragraph: etree._Element,
+    text: str,
+    example: etree._Element | None,
+) -> None:
+    """Write `text` into `paragraph`; {[...]} segments come out yellow."""
+    for segment, is_parameter in split_parameters(text):
+        if is_parameter:
+            paragraph.append(parameter_run(segment, example))
+        else:
+            paragraph.append(run(segment, example))
 
 
 def remove_bookmark(root: etree._Element, name: str) -> None:
@@ -571,12 +752,16 @@ def paragraph_text_of(example: etree._Element, text: str, *, bold: bool = False)
 
 
 def set_paragraph_text(paragraph: etree._Element, text: str) -> None:
-    """Rewrite the runs of `paragraph`, keeping its formatting."""
+    """Rewrite the runs of `paragraph`, keeping its formatting.
+
+    Segments in square brackets come out yellow: they are template parameters the
+    sender fills in per project.
+    """
     model = paragraph.find(W + "r")
     for child in list(paragraph):
         if child.tag != W + "pPr":
             paragraph.remove(child)
-    paragraph.append(run(text, model))
+    append_parameter_runs(paragraph, text, model)
 
 
 def bullet_paragraph(text: str) -> etree._Element:
@@ -595,7 +780,31 @@ def bullet_paragraph(text: str) -> etree._Element:
     alignment = etree.SubElement(properties, W + "jc")
     alignment.set(W + "val", "both")
     properties.append(arial_rpr())
-    paragraph.append(styled_run(text))
+    template_run = etree.Element(W + "r")
+    template_run.append(arial_rpr())
+    append_parameter_runs(paragraph, text, template_run)
+    return paragraph
+
+
+def note_paragraph(text: str) -> etree._Element:
+    """A plain note under a table or list, in the style of the mounting note.
+
+    Square-bracketed segments come out yellow: they are the template parameters
+    the sender fills in per project.
+    """
+    paragraph = etree.Element(W + "p")
+    properties = etree.SubElement(paragraph, W + "pPr")
+    spacing = etree.SubElement(properties, W + "spacing")
+    spacing.set(W + "before", "120")
+    spacing.set(W + "after", "160")
+    spacing.set(W + "line", "259")
+    spacing.set(W + "lineRule", "auto")
+    justification = etree.SubElement(properties, W + "jc")
+    justification.set(W + "val", "both")
+    properties.append(arial_rpr())
+    template_run = etree.Element(W + "r")
+    template_run.append(arial_rpr())
+    append_parameter_runs(paragraph, text, template_run)
     return paragraph
 
 
@@ -1016,9 +1225,21 @@ def reword_opening(body: etree._Element, old: str, new: str) -> None:
     raise ValueError(f"Could not reword the paragraph starting with {old!r}")
 
 
+def rename_stages(body: etree._Element) -> None:
+    """Bring the exact stage paragraphs to the current names, tables included."""
+    for old, new in STAGE_RENAMES:
+        for paragraph in body.iter(W + "p"):
+            if word_text(paragraph).strip() == old:
+                set_paragraph_text(paragraph, new)
+
+
 def update_terms_wording(body: etree._Element) -> None:
     """Payment, delivery and certification wordings from the review."""
     for anchor, text in PAYMENTS:
+        paragraph = find_paragraph(body, anchor)
+        if word_text(paragraph).strip() != text:
+            set_paragraph_text(paragraph, text)
+    for anchor, text in REVIEWED_WORDINGS:
         paragraph = find_paragraph(body, anchor)
         if word_text(paragraph).strip() != text:
             set_paragraph_text(paragraph, text)
@@ -1097,49 +1318,64 @@ def add_reference_appendix_labels(body: etree._Element) -> None:
         title.addprevious(appendix_label(example, appendix_number(body, title)))
 
 
-def add_gost34_documents(body: etree._Element) -> None:
-    """Appendix 4: the document set, the handover documents, and no duplicates.
+def add_document_blocks(body: etree._Element) -> None:
+    """Appendix 4: the handover documents in four blocks.
 
-    The step owns its rows: anything the constants list is put back in order, the
-    two general rows that repeated the specific items are dropped, and the shaded
-    group row of an earlier revision («РКД и ЭД по ГОСТ 34») is removed so the
-    list starts at 1.
+    Working documentation (РКД), operational documentation (ЭД), executive
+    documentation and protocols, and acts. Each block opens with a shaded group
+    row that states the format, the number of copies and the standard, then the
+    numbered documents of the block. The step owns every data row: the table is
+    rebuilt from the constants, so a stale row of an earlier revision (the act
+    of the commissioning stage, the two general rows, the trailing period) goes
+    and the blocks stay in order. Numbering runs straight through the blocks.
     """
     table = find_table(body, DOCUMENTS_ANCHOR)
-    for cell in table.iter(W + "tc"):
-        paragraphs = cell.findall(W + "p")
-        if len(paragraphs) < 2:
-            continue
-        for paragraph in paragraphs[1:]:
-            if word_text(paragraph).strip() == DOCUMENTS_STAGE_NOTE:
-                cell.remove(paragraph)
-
-    for row in table.findall(W + "tr"):
-        if word_text(row).strip() == LEGACY_GROUP_ROW:
-            table.remove(row)
-
     rows = table.findall(W + "tr")
-    example = next(row for row in rows[1:] if len(row.findall(W + "tc")) > 1)
-    anchor = rows[0]
-    for text in RKD_DOCUMENTS:
-        match = next(
-            (row for row in table.findall(W + "tr") if row_label(row) == text), None
-        )
-        if match is not None:
-            anchor = match
-            continue
-        row = item_row(example, text)
-        anchor.addnext(row)
-        anchor = row
+    header = rows[0]
+    example = next(
+        (row for row in rows[1:] if len(row.findall(W + "tc")) > 1), None
+    )
+    if example is None:
+        raise ValueError("Could not locate a document row to clone in Appendix 4")
+    for row in rows[1:]:
+        table.remove(row)
 
-    labels = {row_label(row) for row in table.findall(W + "tr")}
-    for text in HANDOVER_DOCUMENTS:
-        if text not in labels:
-            table.append(item_row(example, text))
-            labels.add(text)
-    for row in table.findall(W + "tr"):
-        if row_label(row) in DUPLICATE_DOCUMENTS:
-            table.remove(row)
+    anchor = header
+    for title, items in DOCUMENT_BLOCKS:
+        group = group_row(example, title)
+        anchor.addnext(group)
+        anchor = group
+        for text in items:
+            if text in REMOVED_DOCUMENTS:
+                continue
+            row = item_row(example, text)
+            anchor.addnext(row)
+            anchor = row
+
+
+def add_parameter_notes(body: etree._Element) -> None:
+    """The travel expenses of the mounting and the commissioning, and the legend.
+
+    Both appendices state how the crew's travel expenses are covered; the
+    allocation is a template parameter with two wordings the sender chooses
+    between, like the bracketed readiness values of Appendix 5. The legend after
+    the mounting note explains what the bracketed yellow segments mean. The
+    steps are idempotent: a note already in the document is not added twice.
+    """
+    mounting_note = find_paragraph(body, MOUNTING_NOTE_ANCHOR)
+    if not has_paragraph(body, TRAVEL_NOTE_MOUNTING):
+        mounting_note.addnext(note_paragraph(TRAVEL_NOTE_MOUNTING))
+    travel = next(
+        paragraph
+        for paragraph in body.findall(W + "p")
+        if word_text(paragraph).strip() == TRAVEL_NOTE_MOUNTING
+    )
+    if not has_paragraph(body, PARAMS_LEGEND):
+        travel.addnext(note_paragraph(PARAMS_LEGEND))
+
+    table = find_table(body, PNR_TABLE_ANCHOR)
+    if not has_paragraph(body, TRAVEL_NOTE_PNR):
+        table.addnext(note_paragraph(TRAVEL_NOTE_PNR))
 
 
 def add_mounting_scope(body: etree._Element) -> None:
@@ -1217,8 +1453,18 @@ def add_mounting_scope(body: etree._Element) -> None:
 
 
 def add_terms_page(body: etree._Element) -> None:
-    """The final page: terms and abbreviations used in the proposal."""
+    """The final page: terms and abbreviations used in the proposal.
+
+    The page itself is added once, but the table is rebuilt from the constants on
+    every run, like the tables of the appendices: a stale entry of an earlier
+    revision (ИМ, ПД, СИ, ТО) goes and a missing one (HMI, SIL, УПД, ГИСП,
+    ЕСКД) arrives.
+    """
     if has_paragraph(body, TERMS_TITLE):
+        table = find_terms_table(body)
+        if table is None:
+            raise ValueError("Could not locate the terms table")
+        fill_terms_table(table)
         return
     heading = paragraph_text_of(
         find_paragraph(body, "Приложения", exact=True), TERMS_TITLE
@@ -1233,17 +1479,26 @@ def add_terms_page(body: etree._Element) -> None:
         body.insert(position + offset, element)
 
 
-def terms_table(body: etree._Element) -> etree._Element:
-    """The abbreviation table, built on the appendix table look."""
-    table = drop_para_ids(deepcopy(find_table(body, DOCUMENTS_ANCHOR)))
+def find_terms_table(body: etree._Element) -> etree._Element | None:
+    """The abbreviation table: the one whose header reads «Сокращение …»."""
+    for table in body.findall(W + "tbl"):
+        rows = table.findall(W + "tr")
+        if not rows:
+            continue
+        cells = rows[0].findall(W + "tc")
+        if [word_text(cell).strip() for cell in cells] == list(TERMS_COLUMNS):
+            return table
+    return None
+
+
+def fill_terms_table(table: etree._Element) -> None:
+    """Rewrite the rows of the terms table from the constants."""
     rows = table.findall(W + "tr")
-    header = rows[0]
-    example = next(row for row in rows[1:] if len(row.findall(W + "tc")) > 1)
+    example = next(
+        row for row in rows[1:] if len(row.findall(W + "tc")) > 1
+    )
     for row in rows[1:]:
         table.remove(row)
-    header_cells = header.findall(W + "tc")
-    for cell, title in zip(header_cells, TERMS_COLUMNS, strict=True):
-        set_cell_text(cell, title)
     for abbreviation, meaning in TERMS:
         row = drop_para_ids(deepcopy(example))
         cells = row.findall(W + "tc")
@@ -1263,6 +1518,19 @@ def terms_table(body: etree._Element) -> etree._Element:
             width.set(W + "w", share)
             width.set(W + "type", "pct")
             insert_in_order(properties, width, TCPR_ORDER)
+
+
+def terms_table(body: etree._Element) -> etree._Element:
+    """The abbreviation table, built on the appendix table look."""
+    table = drop_para_ids(deepcopy(find_table(body, DOCUMENTS_ANCHOR)))
+    rows = table.findall(W + "tr")
+    header = rows[0]
+    header_cells = header.findall(W + "tc")
+    for cell, title in zip(header_cells, TERMS_COLUMNS, strict=True):
+        set_cell_text(cell, title)
+    # fill_terms_table clones a data row to rebuild the entries, so the rows
+    # are removed there, not here.
+    fill_terms_table(table)
     return table
 
 
@@ -1756,10 +2024,12 @@ def patch_template() -> None:
     rework_offer_terms(body)
     add_project_duration(body)
     update_terms_wording(body)
+    rename_stages(body)
     extend_appendix_list(body)
     add_reference_appendix_labels(body)
-    add_gost34_documents(body)
+    add_document_blocks(body)
     add_mounting_scope(body)
+    add_parameter_notes(body)
     add_gantt(body)
     add_terms_page(body)
     # Last, so the paragraphs the content steps cloned are normalised too.
