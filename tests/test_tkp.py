@@ -221,7 +221,6 @@ class TKPTest(unittest.TestCase):
             "Монтаж и подключение кабельных линий",
             "Для управления следующими системами",
             "контроллеров шкафов диспетчеризации",
-            "Исполнительная документация",
             "оперативного и инженеров",
             "заземляющими элементами",
             "распределенных",
@@ -260,7 +259,9 @@ class TKPTest(unittest.TestCase):
             "выдаётся сертификат",
             "надёжность",
             "за счёт трёхуровневой",
-            "собственности к Заказчику",
+            "с даты ввода в эксплуатацию, но не более 30 месяцев с даты поставки",
+            "не является публичной офертой",
+            "за исключением случаев, предусмотренных закупочными процедурами Заказчика",
             "для создания АСУ ТП осуществляется на склад Заказчика по адресу:",
             "Технико-коммерческое предложение",
             "Перечень передаваемой документации",
@@ -270,11 +271,10 @@ class TKPTest(unittest.TestCase):
             "Руководство оператора",
             "Руководство администратора",
             "Паспорта и сертификаты соответствия на покупное оборудование",
-            "Акт выполненных пусконаладочных работ",
             "Настройка контроллеров ПТК",
             "оперативного персонала и инженеров АСУ ТП",
             "10 (десять) недель с момента окончания работ по этапу № 6",
-            "Монтаж оборудования",
+            "Монтажные работы",
             "между заземлителями и заземляемыми элементами",
             "в электроустановках напряжением до 1000 В",
             "распределённых АСУ ТП",
@@ -481,6 +481,112 @@ class TKPTest(unittest.TestCase):
         # scope of supply to the items of the specification.
         self.assertNotIn("ЗИП", " ".join(block))
 
+    def test_template_uses_the_same_stage_names_everywhere(self):
+        """Параметры предложения и Приложение 8 называют этапы одинаково.
+
+        The parameters table said «Наладка ПТК и комплексная наладка системы»
+        against «Пусконаладочные работы» in the appendices, and Appendix 8 said
+        «Разработка конструкторской документации» against «Разработка РКД в
+        части ПТК АСУ ТП» in the parameters table. One stage, one name, in the
+        table of parameters, in the appendix and in the chart.
+        """
+        body = template_body()
+        text = element_text(body)
+        for unified in (
+            "Разработка РКД в части ПТК АСУ ТП",
+            "Пусконаладочные работы",
+            "Доставка оборудования",
+            "Обучение персонала",
+        ):
+            self.assertIn(unified, text)
+        for retired in (
+            "Разработка конструкторской документации",
+            "Наладка ПТК и комплексная наладка",
+        ):
+            self.assertNotIn(retired, text)
+        parameters = rows_of(find_table(body, "ИТОГО без НДС"))
+        stages = [row[1].strip() for row in parameters[1:10]]
+        self.assertEqual(
+            stages,
+            [
+                "Поставка ПО",
+                "Поставка ПТК АСУ ТП",
+                "Поставка телекоммуникационного оборудования",
+                "Поставка шкафного оборудования",
+                "Разработка РКД в части ПТК АСУ ТП",
+                "Разработка ППО",
+                "Монтажные работы",
+                "Пусконаладочные работы",
+                "Обучение персонала",
+            ],
+        )
+        plan = find_table(body, "Плановая дата выполнения")
+        plan_text = element_text(plan)
+        self.assertIn("Разработка РКД в части ПТК АСУ ТП", plan_text)
+        chart = next(
+            table
+            for table in body.findall(f"{{{W}}}tbl")
+            if rows_of(table)[0][0] == "Этап"
+        )
+        self.assertIn("Разработка РКД в части ПТК АСУ ТП", element_text(chart))
+
+    def test_template_marks_the_parameter_values(self):
+        """The values a sender fills in per project are bracketed and yellow.
+
+        «~380 В (3ф)», «5 кВт на шкаф» and the raised floor are project data,
+        not facts about every object, so they ship as template parameters; the
+        legend under the mounting note explains the convention, and the travel
+        expenses of the mounting and the commissioning are covered the same way.
+        """
+        body = template_body()
+        texts = [element_text(p) for p in body.findall(f"{{{W}}}p")]
+        readiness = next(t for t in texts if t.startswith("электропитание:"))
+        self.assertIn("[~380 В (3ф)]", readiness)
+        self.assertIn("[5] кВт на шкаф", readiness)
+        raised_floor = next(t for t in texts if t.startswith("основания и фальшпол"))
+        self.assertIn("[фальшпол с необходимой несущей способностью", raised_floor)
+        legend = next(t for t in texts if t.startswith("Параметры шаблона:"))
+        self.assertIn("квадратных скобках", legend)
+        self.assertIn("жёлтым", legend)
+        # Five bracketed parameters, each on its own yellow run: two in the
+        # power supply bullet, one in the raised floor, two travel notes.
+        yellow = [
+            node
+            for node in body.iter(f"{{{W}}}highlight")
+            if node.get(f"{{{W}}}val") == "yellow"
+        ]
+        self.assertEqual(len(yellow), 5)
+        travel = [t for t in texts if t.startswith("Командировочные расходы: [")]
+        self.assertEqual(len(travel), 2)
+        self.assertTrue(any("монтажных работ" in t for t in travel))
+        self.assertTrue(any("пусконаладочных работ" in t for t in travel))
+
+    def test_template_states_the_warranty_and_the_offer_status(self):
+        """Гарантия и статус документа: формулы, на которые не спорят заказчики.
+
+        The warranty counts from «ввод в эксплуатацию» capped by «не более
+        30 месяцев с даты поставки» — «с даты перехода права собственности»
+        customers push back on. The status clause says the document is not a
+        public offer (ст. 435 ГК РФ) instead of calling it an «официальное»
+        proposal with a price and a validity period. The confidentiality clause
+        exempts the customer's own tender procedures.
+        """
+        texts = [element_text(p) for p in template_body().findall(f"{{{W}}}p")]
+        warranty = next(t for t in texts if t.startswith("Гарантия на оборудование"))
+        self.assertIn(
+            "с даты ввода в эксплуатацию, но не более 30 месяцев с даты поставки",
+            warranty,
+        )
+        self.assertNotIn("перехода права собственности", warranty)
+        status = next(t for t in texts if t.startswith("Настоящий документ"))
+        self.assertIn("не является публичной офертой", status)
+        self.assertNotIn("официальным", status)
+        confidentiality = next(t for t in texts if t.startswith("Информация, содержащаяся"))
+        self.assertIn(
+            "за исключением случаев, предусмотренных закупочными процедурами Заказчика",
+            confidentiality,
+        )
+
     def test_template_drops_the_customer_duties_block(self):
         """Page 2 no longer repeats what Appendix 5 asks the customer for.
 
@@ -539,15 +645,21 @@ class TKPTest(unittest.TestCase):
         terms = rows_of(body.findall(f"{{{W}}}tbl")[-1])
         self.assertEqual(terms[0], ["Сокращение", "Расшифровка"])
         self.assertEqual(
-            [row[0] for row in terms[1:9]],
-            ["ПТК", "ППО", "РКД", "УСО", "ЗПИ", "ПСИ", "АРМ", "КИИ"],
+            [row[0] for row in terms[1:]],
+            [
+                "HMI", "SIL",
+                "АРМ", "АСУ ТП", "ГИСП", "ЕСКД", "ЗИП", "ЗПИ", "ИБП", "КИИ",
+                "ЛВС", "НДС", "ПМИ", "ПНР", "ППО", "ПСИ", "ПТК", "РКД",
+                "УПД", "УСО", "ФСТЭК России", "ЭД",
+            ],
         )
         abbreviations = {row[0] for row in terms[1:]}
-        for used in (
-            "АСУ ТП", "ЗИП", "ИБП", "ИМ", "ЛВС", "НДС", "ПД", "ПМИ", "ПНР", "СИ",
-            "ТО", "ФСТЭК России", "ЭД",
-        ):
+        # The review asked for these: they are used in the document but had no
+        # entry. ИМ, ПД, СИ and ТО are gone: nothing in the document uses them.
+        for used in ("HMI", "SIL", "УПД", "ГИСП", "ЕСКД"):
             self.assertIn(used, abbreviations)
+        for unused in ("ИМ", "ПД", "СИ", "ТО"):
+            self.assertNotIn(unused, abbreviations)
         for row in terms[1:]:
             self.assertEqual(len(row), 2)
             self.assertTrue(row[1], row)
@@ -675,41 +787,67 @@ class TKPTest(unittest.TestCase):
         def table_rows(index: int) -> list[list[str]]:
             return rows_of(tables[index])
 
-        # Приложение 4 is the list of documents handed over to the customer. The
-        # shaded «РКД и ЭД по ГОСТ 34» row that used to open it is gone: the
-        # heading of the appendix says the same, and the list starts at 1.
+        # Приложение 4 hands the documentation over in four blocks: РКД, ЭД,
+        # executive documentation and protocols, and acts. Each shaded group row
+        # states the format, the number of copies and the standard; the numbered
+        # documents run 1..21 through the blocks. The act of the commissioning
+        # stage used to close the list: it is not documentation, and Appendix 8
+        # tracks it with the stage «Пусконаладочные работы» instead.
         documents = table_rows(2)
         self.assertEqual(
-            [row[-1] for row in documents],
+            [row[-1] if len(row) > 1 else row[0] for row in documents],
             [
                 "Наименование",
+                "РКД — рабочая конструкторская документация (ЕСКД, ГОСТ 34.201): "
+                "2 экземпляра на бумажном носителе, 1 экземпляр в электронном виде "
+                "(PDF; графическая часть — PDF + DWG)",
                 "Схема структурная комплекса технических средств автоматизации",
                 "Схемы соединений внешних проводок и таблицы соединений внешних проводок",
                 "Схемы принципиальные и схемы подключений",
                 "Чертежи общего вида шкафов",
                 "Ведомость покупных изделий",
                 "Программа и методика испытаний (ПМИ)",
-                "Протоколы заводских приёмо‑сдаточных испытаний (ЗПИ)",
-                "Протоколы приёмо‑сдаточных испытаний (ПСИ)",
                 "Описание прикладного программного обеспечения (ППО)",
+                "ЭД — эксплуатационная документация (ГОСТ 34.201): "
+                "2 экземпляра на бумажном носителе, 1 экземпляр в электронном виде "
+                "(PDF; исходные файлы — по запросу)",
                 "Руководство оператора",
                 "Руководство администратора",
                 "Инструкция по техническому обслуживанию",
                 "Формуляр (паспорт) на оборудование",
                 "Ведомость ЗИП",
+                "Паспорта и сертификаты соответствия на покупное оборудование",
+                "Исполнительная документация и протоколы: "
+                "1 экземпляр на бумажном носителе, 1 экземпляр в электронном виде "
+                "(PDF; исполнительные схемы — PDF + DWG)",
+                "Протоколы заводских приёмо‑сдаточных испытаний (ЗПИ)",
+                "Протоколы приёмо‑сдаточных испытаний (ПСИ)",
                 "Протокол проверки наличия цепи между заземлителями и заземляемыми элементами",
                 "Протокол измерения сопротивления изоляции",
                 "Протокол проверки автоматических выключателей в электроустановках "
-                "напряжением до 1000 В.",
+                "напряжением до 1000 В",
                 "Кабельный журнал",
                 "Исполнительные схемы",
+                "Акты: 2 экземпляра на бумажном носителе",
                 "Акты скрытых работ",
-                "Паспорта и сертификаты соответствия на покупное оборудование",
-                "Акт выполненных пусконаладочных работ",
             ],
         )
-        # Every row is a numbered document, 1..22 — there is no spanning row.
-        self.assertEqual(len(documents[1]), 2)
+        # The group rows span both columns and carry no number; the documents
+        # are numbered straight through the blocks.
+        group_rows = [row for row in documents if len(row) == 1]
+        self.assertEqual(len(group_rows), 4)
+        self.assertEqual(
+            len([row for row in tables[2].findall(f"{{{W}}}tr")][1:]), 25
+        )
+        numbers = [
+            row.find(f".//{{{W}}}numPr/{{{W}}}numId")
+            for row in tables[2].findall(f"{{{W}}}tr")[1:]
+        ]
+        numbered = [node for node in numbers if node is not None]
+        self.assertEqual(len(numbered), 21)
+        self.assertNotIn(
+            "Акт выполненных пусконаладочных работ", element_text(tables[2])
+        )
         self.assertNotIn(
             "Оформляется на этапе выполнения монтажных работ", element_text(tables[2])
         )
@@ -833,7 +971,7 @@ class TKPTest(unittest.TestCase):
         self.assertEqual(
             bars,
             {
-                "Разработка РКД": (1, 10, 10),
+                "Разработка РКД в части ПТК АСУ ТП": (1, 10, 10),
                 "Разработка ППО": (1, 19, 19),
                 "Заказ и сборка оборудования": (1, 20, 20),
                 "Заводские приёмо‑сдаточные испытания": (21, 21, 1),
